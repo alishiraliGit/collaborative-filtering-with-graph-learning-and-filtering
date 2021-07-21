@@ -1,0 +1,6 @@
+data
+results
+virtualenv
+.idea
+*.pyc
+*.cpython-38.pyc
