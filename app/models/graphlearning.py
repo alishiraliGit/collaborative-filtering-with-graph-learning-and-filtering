@@ -1,9 +1,12 @@
 import os
+import abc
 from tqdm import tqdm
 import pickle
 import numpy as np
 from numpy.random import default_rng
 from scipy.optimize import least_squares
+from scipy.sparse import csr_matrix
+from scipy.stats import ks_2samp
 from matplotlib import pyplot as plt
 
 from app.models.model_base import Model
@@ -12,13 +15,42 @@ from app.utils.mathtools import ls, rmse, list_minus_list
 from app.utils.log import Logger
 
 
-class GraphLearner(Model):
+class GraphLearnerBase(Model, abc.ABC):
     def __init__(self, adj_mat, ui_is_rated_mat):
         self._adj_mat = adj_mat  # [n_user x n_user]
         self._ui_is_rated_mat = ui_is_rated_mat  # [n_user x n_item]
         self._n_user, self._n_item = ui_is_rated_mat.shape
 
         self.x_mat = None  # [(n_user + 1) x n_item]
+
+    @staticmethod
+    def from_graph_object(g: Graph, ui_is_rated_mat):
+        pass
+
+    @abc.abstractmethod
+    def fit_shift_operator(self, **kwargs):
+        pass
+
+    @abc.abstractmethod
+    def fit_x(self, **kwargs):
+        pass
+
+    def fit(self, x_0_mat, verbose=False, **kwargs):
+        self.x_mat = x_0_mat
+
+        if verbose:
+            print('Updating x_mat ...')
+        self.fit_x(**kwargs)
+
+        if verbose:
+            print('Updating s_mat ...')
+        self.fit_shift_operator(**kwargs)
+
+
+class GraphLearner(GraphLearnerBase):
+    def __init__(self, adj_mat, ui_is_rated_mat):
+        super().__init__(adj_mat, ui_is_rated_mat)
+
         self.s_mat = None  # [(n_user + 1) x (n_user + 1)]
 
     @staticmethod
@@ -44,13 +76,13 @@ class GraphLearner(Model):
 
         return g_learner
 
-    def fit_shift_operator(self, l2_lambda=0.):
+    def fit_shift_operator(self, l2_lambda_s=0., weights=np.array([1]), verbose_s=True, **kwargs):
         n_user = self._n_user
 
         self.s_mat = np.zeros((n_user + 1, n_user + 1))
         self.s_mat[n_user, n_user] = 1
 
-        for u in tqdm(range(n_user)):
+        for u in tqdm(range(n_user), disable=not verbose_s):
             # Extract sub-matrices
             users_u = np.where(self._adj_mat[u] == 1)[0]
             idx_s_u = np.concatenate((users_u, [n_user]))
@@ -61,18 +93,25 @@ class GraphLearner(Model):
 
             x_u = self.x_mat[u, items_u]
 
+            if len(weights) > 1:
+                weights_u = weights[items_u]
+            else:
+                weights_u = weights
+
             # Least square estimation
-            s_u = ls(x_mat_u.T, x_u, l2_lambda=l2_lambda)
+            s_u = ls(x_mat_u.T, x_u, l2_lambda=l2_lambda_s, weights=weights_u)
 
             # Fill the s_mat
             self.s_mat[u, idx_s_u] = s_u[:, 0]
 
-    def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, l2_lambda=0., gamma=0.):
+    def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, l2_lambda_x=0., gamma=0.,
+              verbose_x=True, **kwargs):
+
         n_user, n_item = self._n_user, self._n_item
 
         new_x_mat = self.x_mat.copy()
 
-        for it in tqdm(range(n_item)):
+        for it in tqdm(range(n_item), disable=not verbose_x):
             # Extract sub-matrices
             unrated_users_i = np.where(~self._ui_is_rated_mat[:, it])[0]
             rated_users_wo_bias_i = np.where(self._ui_is_rated_mat[:, it])[0]
@@ -112,7 +151,7 @@ class GraphLearner(Model):
                 np.concatenate((s_unrated_i_mat, np.sqrt(gamma)*np.eye(n_unrated_users_i)), axis=0)
 
             # Least square estimation
-            # x_unrated_i_new = ls(s_unrated_i_extended_mat, y_i_extended, l2_lambda=l2_lambda)
+            # x_unrated_i_new = ls(s_unrated_i_extended_mat, y_i_extended, l2_lambda=l2_lambda_x)
             x_unrated_i = self.x_mat[unrated_users_i, it:(it + 1)]
             x_unrated_i_new = self.ls(x_0=x_unrated_i[:, 0],
                                       s_unrated_mat=s_unrated_i_extended_mat,
@@ -153,23 +192,6 @@ class GraphLearner(Model):
 
         return res.x.reshape((-1, 1))
 
-    def fit(self, x_0_mat, **kwargs):
-        self.x_mat = x_0_mat
-
-        verbose = kwargs['verbose']
-
-        if verbose:
-            print('Updating x_mat ...')
-        self.fit_x(min_val=kwargs['min_val'],
-                   max_val=kwargs['max_val'],
-                   max_distance_to_rated=kwargs['max_distance_to_rated'],
-                   l2_lambda=kwargs['l2_lambda_x'],
-                   gamma=kwargs['gamma'])
-
-        if verbose:
-            print('Updating s_mat ...')
-        self.fit_shift_operator(l2_lambda=kwargs['l2_lambda_s'])
-
     def predict(self, x_mat, **kwargs):
         return self.s_mat.dot(x_mat)[:-1]
 
@@ -196,6 +218,118 @@ class GraphLearner(Model):
         g_learner.s_mat = dic['s_mat']
 
         return g_learner, dic
+
+
+class CounterfactualGraphLearner(GraphLearnerBase):
+    def __init__(self, adj_mat, ui_is_rated_mat):
+        super().__init__(adj_mat, ui_is_rated_mat)
+
+        self.s_mat_list = []  # list of sparse [(n_user + 1) x (n_user + 1)] matrices
+        self.ks_mat = None  # [n_item x n_item]
+
+    @staticmethod
+    def from_graph_object(g: Graph, ui_is_rated_mat):
+        # Instantiate a GraphLearner from graph
+        g_learner = GraphLearner.from_graph_object(g, ui_is_rated_mat)
+
+        # Extract the s_mat of GraphLearner
+        csr_s_mat = csr_matrix(g_learner.s_mat)
+
+        # Instantiate a CGLearner
+        cg_learner = CounterfactualGraphLearner(g.adj_mat, ui_is_rated_mat)
+
+        # Fill in the s_mat list
+        for _ in range(cg_learner._n_item):
+            cg_learner.s_mat_list.append(csr_s_mat.copy())
+
+        return cg_learner
+
+    def fit_ks_statistics(self, rat_mat):
+        self.ks_mat = np.zeros((self._n_item, self._n_item))
+
+        for it in tqdm(range(self._n_item)):
+            self.ks_mat[it] = self._calc_ks_statistics_per_item(it, rat_mat)
+
+    def _calc_ks_statistics_per_item(self, it, rat_mat):
+        ks = np.zeros((self._n_item,))
+
+        for o_it in range(self._n_item):
+            if o_it == it:
+                continue
+
+            rated_vals_o_with_nan = rat_mat[self._ui_is_rated_mat[:, it], o_it]
+            unrated_vals_o_with_nan = rat_mat[~self._ui_is_rated_mat[:, it], o_it]
+
+            rated_vals_o = rated_vals_o_with_nan[~np.isnan(rated_vals_o_with_nan)]
+            unrated_vals_o = unrated_vals_o_with_nan[~np.isnan(unrated_vals_o_with_nan)]
+
+            if len(rated_vals_o) == 0 or len(unrated_vals_o) == 0:
+                ks[o_it] = 0.5
+                continue
+
+            ks[o_it] = ks_2samp(rated_vals_o, unrated_vals_o).statistic/2
+
+        return ks
+
+    def fit_shift_operator(self, l2_lambda_s=0., verbose_s=True, **kwargs):
+        n_item = self._n_item
+
+        for it in tqdm(range(n_item), disable=not verbose_s):
+            ui_is_rated_wo_i_mat = self._ui_is_rated_mat.copy()
+            ui_is_rated_wo_i_mat[:, it] = 0
+
+            # Instantiate a GraphLearner
+            g_learner_i = GraphLearner(self._adj_mat, ui_is_rated_wo_i_mat)
+            g_learner_i.x_mat = self.x_mat
+
+            # Fit the GraphLearner with corresponding weights
+            g_learner_i.fit_shift_operator(l2_lambda_s=l2_lambda_s,
+                                           weights=(1 - self.ks_mat[it]),
+                                           verbose_s=False,
+                                           **kwargs)
+
+            # Fill the list of s_mats
+            self.s_mat_list[it] = csr_matrix(g_learner_i.s_mat)
+
+    def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, l2_lambda_x=0., gamma=0.,
+              verbose_x=True, **kwargs):
+
+        n_item = self._n_item
+
+        new_x_mat = self.x_mat.copy()
+
+        for it in tqdm(range(n_item), disable=not verbose_x):
+            g_learner_i = GraphLearner(adj_mat=self._adj_mat, ui_is_rated_mat=self._ui_is_rated_mat[:, it:(it + 1)])
+
+            g_learner_i.s_mat = self.s_mat_list[it].toarray()
+            g_learner_i.x_mat = self.x_mat[:, it:(it + 1)]
+
+            g_learner_i.fit_x(min_val=min_val,
+                              max_val=max_val,
+                              max_distance_to_rated=max_distance_to_rated,
+                              l2_lambda_x=l2_lambda_x,
+                              gamma=gamma,
+                              verbose_x=False,
+                              **kwargs)
+
+            new_x_mat[:, it:(it + 1)] = g_learner_i.x_mat
+
+        self.x_mat = new_x_mat
+
+    def predict(self, data_te, **kwargs):
+        x_pr_mat = np.zeros(self.x_mat.shape)
+
+        for it in range(self._n_item):
+            x_pr_mat[:, it:(it + 1)] = self.s_mat_list[it].dot(self.x_mat[:, it:(it + 1)])
+
+        return x_pr_mat[:-1]
+
+    def save_to_file(self, savepath, file_name, ext_dic=None):
+        pass
+
+    @staticmethod
+    def load_from_file(loadpath, file_name):
+        pass
 
 
 def plot_users(rat_tr, rat_te, rat_pr, users):

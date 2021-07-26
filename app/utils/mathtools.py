@@ -2,20 +2,29 @@ import numpy as np
 from scipy.linalg import pinv
 
 
-def ls(x_mat, y, l2_lambda=0):
+def ls(x_mat, y, l2_lambda=0, weights=np.array([1])):
     """
     x_mat * s = y
 
-    :param l2_lambda: l2- regularization
+    :param l2_lambda: l2-regularization
+    :param weights:
     :param x_mat: [a x b] where a > b
     :param y: [a,] or [a x 1]
     :return s: least square estimation: [b x 1]
     """
+    a, b = x_mat.shape
     if y.ndim == 1:
         y = y.reshape((-1, 1))
 
-    b = x_mat.shape[1]
+    if len(weights) <= 1:
+        weights = np.ones((a,))
 
+    # Apply weights
+    sq_w_mat = np.diag(np.sqrt(weights))
+    x_mat = sq_w_mat.dot(x_mat)
+    y = sq_w_mat.dot(y)
+
+    # Calc. pseudo-inverse
     p_inv_x_mat = np.linalg.inv(x_mat.T.dot(x_mat) + l2_lambda*np.eye(b)).dot(x_mat.T)  # [b x a]
 
     s = p_inv_x_mat.dot(y)
@@ -53,5 +62,14 @@ def fill_with_row_means(mat_org):
 
     for row in range(mat.shape[0]):
         mat[row, np.isnan(mat[row])] = np.nanmean(mat[row])
+
+    return mat
+
+
+def bound_within(mat_org, min_val, max_val):
+    mat = mat_org.copy()
+
+    mat[mat > max_val] = max_val
+    mat[mat < min_val] = min_val
 
     return mat

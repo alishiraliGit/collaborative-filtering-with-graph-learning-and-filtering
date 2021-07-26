@@ -1,16 +1,15 @@
 
-
-from app.models.graphlearning import GraphLearner
+from app.models.graphlearning import GraphLearnerBase
 from app.utils.log import Logger
 from app.utils.mathtools import rmse
 
 
 class GraphLearningCD:
-    def __init__(self, g_learner: GraphLearner, logger: Logger):
+    def __init__(self, g_learner: GraphLearnerBase, logger: Logger):
         self.g_learner = g_learner
         self.logger = logger
 
-    def run(self, x_0_mat, rat_mat_tr, rat_mat_va, rat_mat_te, n_iter, **kwargs):
+    def run(self, x_0_mat, rat_mat_tr, rat_mat_va, rat_mat_te, n_iter, verbose=False, **kwargs):
         self.g_learner.x_mat = x_0_mat
 
         # Initial evaluations
@@ -29,16 +28,10 @@ class GraphLearningCD:
         self.logger.log(rmse_tr, rmse_va, rmse_te)
 
         for it in range(n_iter):
-            verbose = kwargs['verbose']
-
             # Update x_mat
             if verbose:
                 print('Updating x_mat ...')
-            self.g_learner.fit_x(min_val=kwargs['min_val'],
-                                 max_val=kwargs['max_val'],
-                                 max_distance_to_rated=kwargs['max_distance_to_rated'],
-                                 l2_lambda=kwargs['l2_lambda_x'],
-                                 gamma=kwargs['gamma'])
+            self.g_learner.fit_x(**kwargs)
 
             rat_mat_pr = self.g_learner.x_mat[:-1]
 
@@ -50,7 +43,7 @@ class GraphLearningCD:
             # Update s_mat
             if verbose:
                 print('Updating s_mat ...')
-            self.g_learner.fit_shift_operator(l2_lambda=kwargs['l2_lambda_s'])
+            self.g_learner.fit_shift_operator(**kwargs)
 
             rat_mat_pr = self.g_learner.predict(self.g_learner.x_mat)
 

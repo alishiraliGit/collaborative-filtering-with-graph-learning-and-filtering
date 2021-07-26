@@ -88,9 +88,9 @@ if __name__ == '__main__':
     save_dic = g_learner_sett.copy()
     save_dic.update(graph_sett)
     save_dic.update(dataset_sett)
-    # graph_learner.save_to_file(savepath=save_path,
-    #                           file_name='graphlearner' + Logger.stringify(save_dic),
-    #                           ext_dic={'dataset': dataset_sett})
+    graph_learner.save_to_file(savepath=save_path,
+                               file_name='graphlearner' + Logger.stringify(save_dic),
+                               ext_dic={'dataset': dataset_sett})
 
     # ----- Plotting -----
     plt.figure()
