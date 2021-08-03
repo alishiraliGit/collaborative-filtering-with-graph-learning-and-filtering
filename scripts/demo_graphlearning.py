@@ -2,7 +2,8 @@ import os
 import numpy as np
 
 from app.transformers.graph import Graph
-from app.models.graphlearning import CounterfactualGraphLearner
+from app.models.graphlearning import CounterfactualGraphLearner, GraphMatrixCompletion, \
+    CounterfactualGraphMatrixCompletion
 from app.utils.mathtools import fill_with_row_means
 from app.utils.log import Logger
 from core.ratingsimulator import simulate_six_users_mar
@@ -25,7 +26,7 @@ if __name__ == '__main__':
     # Simulation
     simul_sett['n_item'] = 500
     simul_sett['sigma_n'] = 0.1
-    simul_sett['p_miss'] = 0.9
+    simul_sett['p_miss'] = 0.5
     simul_sett['min_val'] = 1
     simul_sett['max_val'] = 5
 
@@ -34,10 +35,12 @@ if __name__ == '__main__':
     graph_sett['max_degree'] = 2
 
     # GLearner
-    g_learner_sett['max_distance_to_rated'] = 1
-    g_learner_sett['l2_lambda_x'] = 0.
+    # g_learner_sett['max_distance_to_rated'] = 1
+    # g_learner_sett['l2_lambda_x'] = 0.
     g_learner_sett['gamma'] = 0.
     g_learner_sett['l2_lambda_s'] = 1
+    g_learner_sett['beta'] = 1
+    g_learner_sett['eps_x'] = 1e-2
     verbose_g_learner = True
 
     # ----- Simulate data -----
@@ -52,7 +55,8 @@ if __name__ == '__main__':
     log_sett = g_learner_sett.copy()
     log_sett.update(graph_sett)
     log_sett.update(simul_sett)
-    logger = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging)
+    logger_x = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='x')
+    logger_s = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='S')
 
     # ----- Fit a graph -----
     print('Fitting Graph ...')
@@ -63,17 +67,18 @@ if __name__ == '__main__':
     # ----- Fit a GLearner -----
     # Init.
     print('Initializing GraphLearner ...')
-    g_learner = CounterfactualGraphLearner.from_graph_object(graph, ~np.isnan(rating_mat_o))
+    g_learner = GraphMatrixCompletion.from_graph_object(graph, ~np.isnan(rating_mat_o))
     g_learner.x_mat = x_0_matrix
 
     # Fit the ks stats
-    print('Fitting KS-statistics ...')
-    g_learner.fit_ks_statistics(rat_mat=rating_mat_o)
+    # print('Fitting KS-statistics ...')
+    # g_learner.fit_ks_statistics(rat_mat=rating_mat_o)
 
     # ----- CD -----
     # Init.
     cd = GraphLearningCD(g_learner=g_learner,
-                         logger=logger)
+                         logger_x=logger_x,
+                         logger_s=logger_s)
 
     # Run
     print('Running coordinate descent ...')
@@ -85,4 +90,5 @@ if __name__ == '__main__':
            verbose=verbose_g_learner,
            min_val=simul_sett['min_val'],
            max_val=simul_sett['max_val'],
+           calc_bias=False,
            **g_learner_sett)

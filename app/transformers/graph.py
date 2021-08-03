@@ -80,7 +80,7 @@ class Graph(Transformer):
             adj_mat_u[other_u] = 1
             w_mat_u[other_u] = reg.coef_[0]
             b_mat_u[other_u] = reg.intercept_
-            score_u[other_u] = reg.score(X=x.reshape((-1, 1)), y=y)
+            score_u[other_u] = reg.score(X=x.reshape((-1, 1)), y=y) + 1e-6
 
         # Check if at least one edge is connected, otherwise reduce the number of required common items
         if np.sum(adj_mat_u) == 0:
@@ -130,6 +130,8 @@ class Graph(Transformer):
         mask = np.zeros((n_user, n_user)).astype(bool)
 
         for u in range(n_user):
+            if u == 153:
+                a = 1
             scores_u = score[u]
 
             idx_max_scores_u = np.argsort(scores_u)[-max_degree:]

@@ -3,16 +3,14 @@ import abc
 from tqdm import tqdm
 import pickle
 import numpy as np
-from numpy.random import default_rng
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, line_search
 from scipy.sparse import csr_matrix
 from scipy.stats import ks_2samp
-from matplotlib import pyplot as plt
+from sklearn.utils.extmath import randomized_svd
 
 from app.models.model_base import Model
 from app.transformers.graph import Graph
-from app.utils.mathtools import ls, rmse, list_minus_list
-from app.utils.log import Logger
+from app.utils.mathtools import ls, list_minus_list, vectorize, unvectorize
 
 
 class GraphLearnerBase(Model, abc.ABC):
@@ -48,6 +46,7 @@ class GraphLearnerBase(Model, abc.ABC):
 
 
 class GraphLearner(GraphLearnerBase):
+
     def __init__(self, adj_mat, ui_is_rated_mat):
         super().__init__(adj_mat, ui_is_rated_mat)
 
@@ -316,11 +315,11 @@ class CounterfactualGraphLearner(GraphLearnerBase):
 
         self.x_mat = new_x_mat
 
-    def predict(self, data_te, **kwargs):
-        x_pr_mat = np.zeros(self.x_mat.shape)
+    def predict(self, x_mat, **kwargs):
+        x_pr_mat = np.zeros(x_mat.shape)
 
         for it in range(self._n_item):
-            x_pr_mat[:, it:(it + 1)] = self.s_mat_list[it].dot(self.x_mat[:, it:(it + 1)])
+            x_pr_mat[:, it:(it + 1)] = self.s_mat_list[it].dot(x_mat[:, it:(it + 1)])
 
         return x_pr_mat[:-1]
 
@@ -332,131 +331,247 @@ class CounterfactualGraphLearner(GraphLearnerBase):
         pass
 
 
-def plot_users(rat_tr, rat_te, rat_pr, users):
-    n_user = len(users)
+class GraphMatrixCompletion(GraphLearnerBase):
+    def __init__(self, adj_mat, ui_is_rated_mat):
+        super().__init__(adj_mat, ui_is_rated_mat)
 
-    for i_u, u in enumerate(users):
-        plt.subplot(n_user, 1, i_u + 1)
+        self.s_mat = None  # [(n_user + 1) x (n_user + 1)]
 
-        plt.plot(rat_te[u], rat_pr[u], 'r*')
-        plt.plot(rat_tr[u], rat_pr[u], 'k*')
-        plt.plot([np.min(rat_pr[u]), np.max(rat_pr[u])], [np.min(rat_pr[u]), np.max(rat_pr[u])], 'k--')
+        self.s_tilde_mat = None
 
-    plt.show()
+    @staticmethod
+    def from_graph_object(g: Graph, ui_is_rated_mat):
+        gmc = GraphMatrixCompletion(g.adj_mat, ui_is_rated_mat)
+
+        g_learner = GraphLearner.from_graph_object(g, ui_is_rated_mat)
+
+        gmc.s_mat = g_learner.s_mat
+
+        return gmc
+
+    def fit_shift_operator(self, **kwargs):
+        g_learner = GraphLearner(adj_mat=self._adj_mat, ui_is_rated_mat=self._ui_is_rated_mat)
+        g_learner.x_mat = self.x_mat
+        g_learner.s_mat = self.s_mat
+
+        g_learner.fit_shift_operator(**kwargs)
+
+        self.s_mat = g_learner.s_mat
+
+    def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **kwargs):
+        s_tilde_mat = (self.s_mat.T - np.eye(self._n_user + 1)).dot(self.s_mat - np.eye(self._n_user + 1))
+
+        it = 1
+        max_it = 50
+        while True:
+            if it == max_it:
+                break
+            if verbose_x:
+                print('iter: %d' % it)
+
+            # Line-search
+            t, p_k = self._line_search_for_t(self.x_mat[:-1], self.s_mat, s_tilde_mat)
+
+            # Gradient descent
+            g_k = np.concatenate((unvectorize(-p_k, n_row=self._n_user), np.zeros((1, self._n_item))), axis=0)
+            x_new_mat = self.x_mat - t*g_k
+
+            # Proximate
+            x_prox_mat = self.proximate(x_new_mat, t, beta)
+
+            # Project
+            x_proj_mat = self.project(self.x_mat, x_prox_mat, self._ui_is_rated_mat)
+
+            # Check the stopping criterion
+            eps_x_k = np.linalg.norm(x_proj_mat - self.x_mat)/np.linalg.norm(self.x_mat)
+            if eps_x_k < eps_x:
+                self.x_mat = x_proj_mat
+                break
+            else:
+                if verbose_x:
+                    print('relative change of x is: %.3f' % eps_x_k)
+                self.x_mat = x_proj_mat
+
+            it += 1
+
+    @staticmethod
+    def _line_search_for_t(x_mat, s_mat, s_tilde_mat):
+        xk = vectorize(x_mat)
+        pk = -GraphMatrixCompletion.jac_s2(xk, s_mat, s_tilde_mat)
+
+        t = line_search(f=GraphMatrixCompletion.s2,
+                        myfprime=GraphMatrixCompletion.jac_s2,
+                        xk=xk,
+                        pk=pk,
+                        c1=0.01,
+                        c2=0.9,
+                        args=(s_mat, s_tilde_mat))[0]
+
+        return t, pk
+
+    @staticmethod
+    def s2(x, s_mat, _s_tilde_mat):
+        x_wo_ones_mat = unvectorize(x, s_mat.shape[0] - 1)
+        x_mat = np.concatenate((x_wo_ones_mat, np.ones((1, x_wo_ones_mat.shape[1]))), axis=0)
+
+        return np.linalg.norm((s_mat - np.eye(s_mat.shape[0])).dot(x_mat))**2
+
+    @staticmethod
+    def jac_s2(x, _s_mat, s_tilde_mat):
+        x_wo_ones_mat = unvectorize(x, s_tilde_mat.shape[0] - 1)
+        x_mat = np.concatenate((x_wo_ones_mat, np.ones((1, x_wo_ones_mat.shape[1]))), axis=0)
+
+        return vectorize(2*s_tilde_mat.dot(x_mat)[:-1])
+
+    @staticmethod
+    def proximate(x_mat, t, beta):
+        tau = t*beta
+
+        rank_x = np.linalg.matrix_rank(x_mat)
+
+        n_svd_comp = 3
+        u_mat, s, vh_mat = randomized_svd(x_mat, n_components=n_svd_comp)
+        while (s[-1] > tau) and (n_svd_comp < rank_x):
+            n_svd_comp = np.max([2*n_svd_comp, rank_x])
+            u_mat, s, vh_mat = randomized_svd(x_mat, n_components=n_svd_comp)
+        # ToDo
+        # print('_proximate: %d components was enough' % n_svd_comp)
+
+        s[s < tau] = 0
+        s[s > tau] -= tau
+
+        return u_mat.dot(np.diag(s)).dot(vh_mat)
+
+    @staticmethod
+    def project(x_mat_old, x_new_mat_org, ui_is_rated_mat):
+        x_new_mat = x_mat_old.copy()
+
+        x_new_mat[:-1][~ui_is_rated_mat] = x_new_mat_org[:-1][~ui_is_rated_mat]
+
+        return x_new_mat
+
+    def predict(self, x_mat, **kwargs):
+        return self.s_mat.dot(x_mat)[:-1]
+
+    def save_to_file(self, savepath, file_name, ext_dic=None):
+        # ToDo
+        pass
+
+    @staticmethod
+    def load_from_file(loadpath, file_name):
+        # ToDo
+        pass
 
 
-def simulate_sample_ratings(n_item, min_val, max_val, sigma_n, p_miss):
-    rng = default_rng(0)
+class CounterfactualGraphMatrixCompletion(GraphLearnerBase):
+    def __init__(self, adj_mat, ui_is_rated_mat):
+        super().__init__(adj_mat, ui_is_rated_mat)
 
-    # Simulate raw ratings
-    r1 = rng.integers(low=min_val, high=max_val, size=(1, n_item)).astype(float)
-    rat_mat_1 = np.concatenate((r1, 2*r1 - 3, -2*r1 + 5), axis=0)
+        self.cg_learner = CounterfactualGraphLearner(adj_mat, ui_is_rated_mat)
 
-    r2 = rng.integers(low=min_val, high=max_val, size=(1, n_item)).astype(float)
-    rat_mat_2 = np.concatenate((r2, 2*r2 - 4, -2*r2 + 6), axis=0)
+    @staticmethod
+    def from_graph_object(g: Graph, ui_is_rated_mat):
+        # Instantiate a CGLearner
+        cg_learner = CounterfactualGraphLearner.from_graph_object(g, ui_is_rated_mat)
 
-    rat_mat_all = np.concatenate((rat_mat_1, rat_mat_2), axis=0)
-    rat_mat_all += rng.normal(loc=0, scale=sigma_n, size=rat_mat_all.shape)
+        # Init. a CGMC
+        cgmc = CounterfactualGraphMatrixCompletion(adj_mat=g.adj_mat, ui_is_rated_mat=ui_is_rated_mat)
 
-    # Remove random elements
-    mask_nan = rng.random(size=rat_mat_all.shape) < p_miss
+        # Fill in the CGLearner
+        cgmc.cg_learner = cg_learner
 
-    rat_mat_o = rat_mat_all.copy()
-    rat_mat_o[mask_nan] = np.nan
+        return cgmc
 
-    rat_mat_m = rat_mat_all.copy()
-    rat_mat_m[~mask_nan] = np.nan
+    def fit_ks_statistics(self, rat_mat):
+        self.cg_learner.fit_ks_statistics(rat_mat)
 
-    return rat_mat_o, rat_mat_m
+    def fit_shift_operator(self, l2_lambda_s=0., verbose_s=True, **kwargs):
+        self.cg_learner.fit_shift_operator(l2_lambda_s=l2_lambda_s, verbose_s=verbose_s, **kwargs)
 
+    def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **kwargs):
+        s_tilde_mat_list = []
+        for s_mat in self.cg_learner.s_mat_list:
+            s_tilde_mat = (s_mat.T - np.eye(self._n_user + 1)).dot(s_mat - np.eye(self._n_user + 1))
+            s_tilde_mat_list.append(s_tilde_mat)
 
-if __name__ == '__main__':
-    # ----- Settings -----
-    sett = {}
-    # General
-    n_iter = 10
-    do_plot_performance = False
-    verbose_g_learner = True
-    do_plot_ratings = True
-    wait_time_to_plot_ratings = 0.5
+        it = 1
+        max_it = 50
+        while True:
+            if it == max_it:
+                break
+            if verbose_x:
+                print('fitting x --> iter: %d' % it)
 
-    # Path
-    save_path = os.path.join('results')
-    os.makedirs(save_path, exist_ok=True)
+            # Line-search
+            t, p_k = self._line_search_for_t(self.x_mat[:-1], self.cg_learner.s_mat_list, s_tilde_mat_list)
 
-    # Simulation
-    num_item = 500
-    min_value = 1
-    max_value = 5
-    sett['sigma_noise'] = 1
-    sett['prob_miss'] = 0.9
+            # Gradient descent
+            g_k = np.concatenate((unvectorize(-p_k, n_row=self._n_user), np.zeros((1, self._n_item))), axis=0)
+            x_new_mat = self.x_mat - t*g_k
 
-    # Graph
-    sett['min_num_common_items'] = 3
-    sett['max_degree'] = 1
+            # Proximate
+            x_prox_mat = GraphMatrixCompletion.proximate(x_new_mat, t, beta)
 
-    # Learner
-    sett['max_distance_to_rated'] = 2
-    sett['l2_lambda_s'] = 0
-    sett['l2_lambda_x'] = 0
-    sett['gamma'] = 0.1
+            # Project
+            x_proj_mat = GraphMatrixCompletion.project(self.x_mat, x_prox_mat, self._ui_is_rated_mat)
 
-    # ----- Simulate sample ratings -----
-    rat_mat_obs, rat_mat_missed = \
-        simulate_sample_ratings(num_item, min_value, max_value, sett['sigma_noise'], sett['prob_miss'])
+            # Check the stopping criterion
+            eps_x_k = np.linalg.norm(x_proj_mat - self.x_mat)/np.linalg.norm(self.x_mat)
 
-    # ----- Find the graph structure -----
-    graph = Graph(min_num_common_items=sett['min_num_common_items'], max_degree=sett['max_degree'])
-    graph.fit_transform(rat_mat_obs)
+            self.cg_learner.x_mat = x_proj_mat
+            self.x_mat = x_proj_mat
 
-    # ----- Init. -----
-    # x
-    x_mat_filled_mean = np.concatenate((rat_mat_obs, np.ones((1, num_item))), axis=0)
-    for user in range(rat_mat_obs.shape[0]):
-        x_mat_filled_mean[user, np.isnan(x_mat_filled_mean[user])] = np.nanmean(rat_mat_obs[user])
+            if eps_x_k < eps_x:
+                break
+            else:
+                if verbose_x:
+                    print('relative change of x is: %.3f' % eps_x_k)
 
-    # Graph learner
-    user_item_is_rated_mat = ~np.isnan(rat_mat_obs)
-    graph_learner = GraphLearner.from_graph_object(graph, user_item_is_rated_mat)
+            it += 1
 
-    # Logger
-    logger = Logger(settings=sett, save_path=save_path, do_plot=do_plot_performance)
+    @staticmethod
+    def s2(x, s_mat_list, _s_tilde_mat_list):
+        x_wo_ones_mat = unvectorize(x, s_mat_list[0].shape[0] - 1)
 
-    # ----- Big loop! -----
-    x_0_matrix = x_mat_filled_mean.copy()
+        loss = 0
+        for i_s, s_mat in enumerate(s_mat_list):
+            loss += GraphMatrixCompletion.s2(x_wo_ones_mat[:, i_s], s_mat, _s_tilde_mat_list[i_s])
 
-    rat_mat_pr = graph_learner.predict(x_0_matrix)
-    rmse_tr = rmse(rat_mat_obs, rat_mat_pr)
-    rmse_te = rmse(rat_mat_missed, rat_mat_pr)
-    logger.log(rmse_tr, 0, rmse_te)
+        return loss
 
-    if do_plot_ratings:
-        plt.figure()
-        plot_users(rat_mat_obs, rat_mat_missed, rat_mat_pr, [0, 1, 2])
-        plt.pause(wait_time_to_plot_ratings)
+    @staticmethod
+    def jac_s2(x, _s_mat_list, s_tilde_mat_list):
+        x_wo_ones_mat = unvectorize(x, s_tilde_mat_list[0].shape[0] - 1)
 
-    for iteration in range(n_iter):
-        # Fit
-        graph_learner.fit(x_0_matrix,
-                          min_val=-10,
-                          max_val=10,
-                          max_distance_to_rated=sett['max_distance_to_rated'],
-                          l2_lambda_x=sett['l2_lambda_x'],
-                          gamma=sett['gamma'],
-                          l2_lambda_s=sett['l2_lambda_s'],
-                          verbose=verbose_g_learner)
+        jac_mat = np.zeros(x_wo_ones_mat.shape)
+        for it in range(jac_mat.shape[1]):
+            jac_mat[:, it] = GraphMatrixCompletion.jac_s2(x_wo_ones_mat[:, it], _s_mat_list[it], s_tilde_mat_list[it])
 
-        # Predict
-        rat_mat_pr = graph_learner.predict(graph_learner.x_mat)
-        rmse_tr = rmse(rat_mat_obs, rat_mat_pr)
-        rmse_te = rmse(rat_mat_missed, rat_mat_pr)
-        logger.log(rmse_tr, 0, rmse_te)
+        return vectorize(jac_mat)
 
-        # Update x
-        x_0_matrix = graph_learner.x_mat
+    @staticmethod
+    def _line_search_for_t(x_mat, s_mat_list, s_tilde_mat_list):
+        xk = vectorize(x_mat)
+        pk = -CounterfactualGraphMatrixCompletion.jac_s2(xk, s_mat_list, s_tilde_mat_list)
 
-        # Plotting
-        if do_plot_ratings:
-            plt.clf()
-            plot_users(rat_mat_obs, rat_mat_missed, rat_mat_pr, [0, 1, 2])
-            plt.pause(wait_time_to_plot_ratings)
+        t = line_search(f=CounterfactualGraphMatrixCompletion.s2,
+                        myfprime=CounterfactualGraphMatrixCompletion.jac_s2,
+                        xk=xk,
+                        pk=pk,
+                        c1=0.01,
+                        c2=0.9,
+                        args=(s_mat_list, s_tilde_mat_list))[0]
+
+        return t, pk
+
+    def predict(self, x_mat, **kwargs):
+        return self.cg_learner.predict(x_mat, **kwargs)
+
+    def save_to_file(self, savepath, file_name, ext_dic=None):
+        # ToDo
+        pass
+
+    @staticmethod
+    def load_from_file(loadpath, file_name):
+        # ToDo
+        pass

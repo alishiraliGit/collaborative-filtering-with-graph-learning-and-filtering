@@ -3,7 +3,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from app.transformers.graph import Graph
-from app.models.graphlearning import GraphLearner
+from app.models.graphlearning import GraphLearner, CounterfactualGraphLearner, GraphMatrixCompletion, \
+    CounterfactualGraphMatrixCompletion
 from app.utils.mathtools import fill_with_row_means
 from app.utils.log import Logger
 from app.utils.data_handler import load_dataset
@@ -17,30 +18,34 @@ if __name__ == '__main__':
     g_learner_sett = {}
 
     # General
-    n_iter = 1
-    do_plot_performance_while_logging = False
+    n_iter = 4
+    do_plot_performance_while_logging = True
+    calc_bias = True
 
     # Path
-    data_load_path = os.path.join('..', 'data', 'ml-100k')
+    data_load_path = os.path.join('..', 'data', 'coat')
     graph_load_path = os.path.join('..', 'results', 'graphs')
 
     save_path = os.path.join('..', 'results', 'graphlearners')
     os.makedirs(save_path, exist_ok=True)
 
     # Dataset
-    dataset_sett['dataset_name'] = 'ml-100k'
-    dataset_sett['part'] = 4
+    dataset_sett['dataset_name'] = 'coat'
+    # dataset_sett['part'] = 4
     dataset_sett['do_transpose'] = False
 
     # Graph
-    graph_sett['min_num_common_items'] = 10
+    graph_sett['min_num_common_items'] = 6
     graph_sett['max_degree'] = 3
 
     # GraphLearner
-    g_learner_sett['max_distance_to_rated'] = 1
-    g_learner_sett['l2_lambda_x'] = 0
-    g_learner_sett['gamma'] = 1
-    g_learner_sett['l2_lambda_s'] = 10
+    # g_learner_sett['max_distance_to_rated'] = 1
+    # g_learner_sett['l2_lambda_x'] = 0
+    # g_learner_sett['gamma'] = 10
+    g_learner_sett['l2_lambda_s'] = 1
+    g_learner_sett['beta'] = 100
+    g_learner_sett['eps_x'] = 1e-2
+    g_learner_sett['verbose_x'] = False
     verbose_g_learner = True
 
     # ----- Load graph -----
@@ -62,17 +67,23 @@ if __name__ == '__main__':
 
     # Graph learner
     user_item_is_rated_mat = ~np.isnan(rating_mat_tr)
-    graph_learner = GraphLearner.from_graph_object(graph, user_item_is_rated_mat)
+    graph_learner = GraphMatrixCompletion.from_graph_object(graph, user_item_is_rated_mat)
+
+    # Fit the ks stats
+    print('Fitting KS-statistics ...')
+    # graph_learner.fit_ks_statistics(rat_mat=rating_mat_tr)
 
     # Logger
     log_sett = g_learner_sett.copy()
     log_sett.update(graph_sett)
     log_sett.update(dataset_sett)
-    logger = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging)
+    logger_x = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='x')
+    logger_s = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='Sx')
 
     # ----- Coordinate descent -----
     cd = GraphLearningCD(g_learner=graph_learner,
-                         logger=logger)
+                         logger_x=logger_x,
+                         logger_s=logger_s)
 
     cd.run(x_0_mat=x_0_matrix,
            rat_mat_tr=rating_mat_tr,
@@ -82,6 +93,7 @@ if __name__ == '__main__':
            verbose=verbose_g_learner,
            min_val=graph_dic['ext']['dataset']['min_value'],
            max_val=graph_dic['ext']['dataset']['max_value'],
+           calc_bias=True,
            **g_learner_sett)
 
     # ----- Save to file -----

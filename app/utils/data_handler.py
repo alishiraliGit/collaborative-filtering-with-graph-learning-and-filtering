@@ -1,11 +1,14 @@
 import csv
 import numpy as np
+from numpy.random import default_rng
 from sklearn.model_selection import train_test_split
 import os
 import pandas as pd
 
 
 def load_dataset(loadpath, name, va_split=None, te_split=None, random_state=1, do_transpose=False, **kwargs):
+
+    rng = default_rng(random_state)
 
     if name == 'ml-100k':
         edges_notmapped_tr_va = get_edge_list_from_file_ml100k(loadpath, 'u%d.base' % kwargs['part'])
@@ -107,6 +110,28 @@ def load_dataset(loadpath, name, va_split=None, te_split=None, random_state=1, d
         rat_mat_te[te_rated_indices] = rat_mat[te_rated_indices]
 
         num_user, num_item = rat_mat.shape
+
+    elif name == 'coat':
+        file_path_tr = os.path.join(loadpath, 'train.ascii')
+        file_path_te = os.path.join(loadpath, 'test.ascii')
+
+        rat_mat_tr_va = np.genfromtxt(fname=file_path_tr, delimiter=' ', dtype=np.float)
+        rat_mat_te = np.genfromtxt(fname=file_path_te, delimiter=' ', dtype=np.float)
+
+        rat_mat_tr_va[rat_mat_tr_va == 0] = np.nan
+        rat_mat_te[rat_mat_te == 0] = np.nan
+
+        num_user, num_item = rat_mat_tr_va.shape
+
+        # Train-validation split
+        mask_tr = np.ones((num_user, num_item), dtype=bool)
+        mask_tr[rng.random(size=(num_user, num_item)) < va_split] = False
+
+        rat_mat_tr = rat_mat_tr_va.copy()
+        rat_mat_tr[~mask_tr] = np.nan
+
+        rat_mat_va = rat_mat_tr_va.copy()
+        rat_mat_va[mask_tr] = np.nan
 
     else:
         raise Exception('%s is not valid dataset.' % name)

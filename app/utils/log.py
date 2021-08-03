@@ -2,19 +2,32 @@ from datetime import datetime
 import pickle
 from matplotlib import pyplot as plt
 import os
+import numpy as np
+from matplotlib import pyplot as plt
 
 
 class Logger:
-    def __init__(self, settings, save_path, do_plot=False):
+    def __init__(self, settings, save_path, title, do_plot=False):
         self.settings = settings
         self.save_path = save_path
         self.do_plot = do_plot
+        self.title = title
 
         self.rmse_tr = []
         self.rmse_va = []
         self.rmse_te = []
 
-    def log(self, rmse_tr, rmse_va, rmse_te):
+        self.bias_tr = []
+        self.bias_va = []
+        self.bias_te = []
+
+        if do_plot:
+            self.fig = plt.figure()
+            plt.title(title)
+            self.fig_bias = plt.figure()
+            plt.title(title)
+
+    def log(self, rmse_tr, rmse_va, rmse_te, bias_tr=np.nan, bias_va=np.nan, bias_te=np.nan, log_bias=False):
         self.rmse_tr += [rmse_tr]
         self.rmse_va += [rmse_va]
         self.rmse_te += [rmse_te]
@@ -22,13 +35,34 @@ class Logger:
         print('iteration: %d, rmse train: %.3f, rmse val: %.3f rmse test: %.3f' %
               (len(self.rmse_tr), self.rmse_tr[-1], self.rmse_va[-1], self.rmse_te[-1]))
 
+        if log_bias:
+            self.bias_tr += [bias_tr]
+            self.bias_va += [bias_va]
+            self.bias_te += [bias_te]
+
+            print('bias train: %.3f, bias val: %.3f bias test: %.3f' %
+                  (self.bias_tr[-1], self.bias_va[-1], self.bias_te[-1]))
+
         if self.do_plot:
+            plt.figure(self.fig.number)
+
             plt.plot(len(self.rmse_tr), self.rmse_tr[-1], 'ro')
             plt.plot(len(self.rmse_va), self.rmse_va[-1], 'ko')
             plt.plot(len(self.rmse_te), self.rmse_te[-1], 'bo')
             plt.legend(['train', 'validation', 'test'])
             plt.ylabel('rmse')
             plt.xlabel('#iter')
+
+            if log_bias:
+                plt.figure(self.fig_bias.number)
+
+                plt.plot(len(self.bias_tr), self.bias_tr[-1], 'ro')
+                plt.plot(len(self.bias_va), self.bias_va[-1], 'ko')
+                plt.plot(len(self.bias_te), self.bias_te[-1], 'bo')
+                plt.legend(['train', 'validation', 'test'])
+                plt.ylabel('average bias')
+                plt.xlabel('#iter')
+
             plt.pause(0.05)
 
     def save(self, ext=None):

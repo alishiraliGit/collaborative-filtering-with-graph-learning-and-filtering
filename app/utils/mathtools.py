@@ -73,3 +73,11 @@ def bound_within(mat_org, min_val, max_val):
     mat[mat < min_val] = min_val
 
     return mat
+
+
+def vectorize(mat, order='F'):
+    return mat.reshape((-1,), order=order)
+
+
+def unvectorize(vec, n_row, order='F'):
+    return vec.reshape((n_row, -1), order=order)
