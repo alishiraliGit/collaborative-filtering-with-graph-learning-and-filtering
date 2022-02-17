@@ -29,7 +29,7 @@ def load_dataset(loadpath, name, va_split=None, te_split=None, random_state=1, d
         edges, map_u, map_i, num_user, num_item = map_ids(edges_notmapped)
 
         edges_tr_va, edges_te = train_test_split(edges, test_size=te_split, random_state=random_state)
-        edges_tr, edges_va = train_test_split(edges_tr_va, test_size=va_split, random_state=random_state)
+        edges_tr, edges_va = train_test_split(edges_tr_va, test_size=va_split/(1 - te_split), random_state=random_state)
 
         rat_mat_tr = get_rating_mat(edges_tr, num_user, num_item)
         rat_mat_va = get_rating_mat(edges_va, num_user, num_item)
@@ -57,7 +57,7 @@ def load_dataset(loadpath, name, va_split=None, te_split=None, random_state=1, d
 
         tr_va_idx, te_idx = \
             train_test_split(range(len(rated_indices[0])), test_size=te_split, random_state=random_state)
-        tr_idx, va_idx = train_test_split(tr_va_idx, test_size=va_split, random_state=random_state)
+        tr_idx, va_idx = train_test_split(tr_va_idx, test_size=va_split/(1 - te_split), random_state=random_state)
 
         tr_rated_indices = (rated_indices[0][tr_idx], rated_indices[1][tr_idx])
         va_rated_indices = (rated_indices[0][va_idx], rated_indices[1][va_idx])
@@ -82,9 +82,6 @@ def load_dataset(loadpath, name, va_split=None, te_split=None, random_state=1, d
 
         # Convert to numpy array
         rat_mat = df.to_numpy()[::5]
-
-        # ToDo
-        rat_mat -= 0.5
 
         # Train-test split
         rated_indices = np.where(~np.isnan(rat_mat))

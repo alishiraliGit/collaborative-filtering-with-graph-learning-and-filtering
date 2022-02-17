@@ -63,6 +63,10 @@ def fill_with_row_means(mat_org):
     for row in range(mat.shape[0]):
         mat[row, np.isnan(mat[row])] = np.nanmean(mat[row])
 
+    # Fill nans with column means
+    for col in range(mat.shape[1]):
+        mat[np.isnan(mat[:, col]), col] = np.nanmean(mat_org[:, col])
+
     return mat
 
 

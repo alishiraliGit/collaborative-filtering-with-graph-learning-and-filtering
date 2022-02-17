@@ -65,6 +65,8 @@ class GraphLearner(GraphLearnerBase):
 
         n_in_edge = np.sum(adj_mat, axis=1)
 
+        n_in_edge[n_in_edge == 0] = 1
+
         b_normalized = np.sum(g.b_mat, axis=1)/n_in_edge
         w_normalized_mat = np.diag(1/n_in_edge).dot(g.w_mat)
 
@@ -103,7 +105,7 @@ class GraphLearner(GraphLearnerBase):
             # Fill the s_mat
             self.s_mat[u, idx_s_u] = s_u[:, 0]
 
-    def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, l2_lambda_x=0., gamma=0.,
+    def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, gamma=0., max_nfev_x=3,
               verbose_x=True, **kwargs):
 
         n_user, n_item = self._n_user, self._n_item
@@ -150,13 +152,13 @@ class GraphLearner(GraphLearnerBase):
                 np.concatenate((s_unrated_i_mat, np.sqrt(gamma)*np.eye(n_unrated_users_i)), axis=0)
 
             # Least square estimation
-            # x_unrated_i_new = ls(s_unrated_i_extended_mat, y_i_extended, l2_lambda=l2_lambda_x)
             x_unrated_i = self.x_mat[unrated_users_i, it:(it + 1)]
             x_unrated_i_new = self.ls(x_0=x_unrated_i[:, 0],
                                       s_unrated_mat=s_unrated_i_extended_mat,
                                       y=y_i_extended,
                                       min_val=min_val,
-                                      max_val=max_val)
+                                      max_val=max_val,
+                                      max_nfev=max_nfev_x)
 
             # Update the x_mat
             new_x_mat[unrated_users_i, it] = x_unrated_i_new[:, 0]
@@ -174,8 +176,8 @@ class GraphLearner(GraphLearnerBase):
         return s_unrated_mat
 
     @staticmethod
-    def ls(x_0, s_unrated_mat, y, min_val, max_val,
-           method='trf', loss='linear', f_scale=1, max_nfev=3, verbose=0, **kwargs):
+    def ls(x_0, s_unrated_mat, y, min_val, max_val, max_nfev,
+           method='trf', loss='linear', f_scale=1, verbose=0, **kwargs):
 
         res = least_squares(fun=GraphLearner.ls_fun,
                             jac=GraphLearner.ls_jac,
@@ -194,7 +196,7 @@ class GraphLearner(GraphLearnerBase):
     def predict(self, x_mat, **kwargs):
         return self.s_mat.dot(x_mat)[:-1]
 
-    def save_to_file(self, savepath, file_name, ext_dic=None):
+    def save_to_file(self, savepath, filename, ext_dic=None):
         dic = {
             'x_mat': self.x_mat,
             's_mat': self.s_mat,
@@ -203,12 +205,12 @@ class GraphLearner(GraphLearnerBase):
             'ext': ext_dic
         }
 
-        with open(os.path.join(savepath, file_name + '.graphlearner'), 'wb') as f:
+        with open(os.path.join(savepath, filename + '.graphlearner'), 'wb') as f:
             pickle.dump(dic, f)
 
     @staticmethod
-    def load_from_file(loadpath, file_name):
-        with open(os.path.join(loadpath, file_name + '.graphlearner'), 'rb') as f:
+    def load_from_file(loadpath, filename):
+        with open(os.path.join(loadpath, filename + '.graphlearner'), 'rb') as f:
             dic = pickle.load(f)
 
         g_learner = GraphLearner(adj_mat=dic['adj_mat'], ui_is_rated_mat=dic['ui_is_rated_mat'])
@@ -453,14 +455,29 @@ class GraphMatrixCompletion(GraphLearnerBase):
     def predict(self, x_mat, **kwargs):
         return self.s_mat.dot(x_mat)[:-1]
 
-    def save_to_file(self, savepath, file_name, ext_dic=None):
-        # ToDo
-        pass
+    def save_to_file(self, savepath, filename, ext_dic=None):
+        dic = {
+            'x_mat': self.x_mat,
+            's_mat': self.s_mat,
+            'adj_mat': self._adj_mat,
+            'ui_is_rated_mat': self._ui_is_rated_mat,
+            'ext': ext_dic
+        }
+
+        with open(os.path.join(savepath, filename + '.gmc'), 'wb') as f:
+            pickle.dump(dic, f)
 
     @staticmethod
-    def load_from_file(loadpath, file_name):
-        # ToDo
-        pass
+    def load_from_file(loadpath, filename):
+        with open(os.path.join(loadpath, filename + '.gmc'), 'rb') as f:
+            dic = pickle.load(f)
+
+        gmc = GraphMatrixCompletion(adj_mat=dic['adj_mat'], ui_is_rated_mat=dic['ui_is_rated_mat'])
+
+        gmc.x_mat = dic['x_mat']
+        gmc.s_mat = dic['s_mat']
+
+        return gmc, dic
 
 
 class CounterfactualGraphMatrixCompletion(GraphLearnerBase):

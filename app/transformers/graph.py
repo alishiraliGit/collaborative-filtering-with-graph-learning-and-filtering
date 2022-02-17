@@ -85,7 +85,8 @@ class Graph(Transformer):
         # Check if at least one edge is connected, otherwise reduce the number of required common items
         if np.sum(adj_mat_u) == 0:
             if min_num_common_items == 1:
-                raise 'No edge is connected to user %d!' % u
+                warnings.warn('No edge is connected to user %d!' % u)
+                return adj_mat_u, w_mat_u, b_mat_u, score_u
 
             warn_msg = 'No user is connected to user %d with %d common items, relaxing the condition' \
                        % (u, min_num_common_items)

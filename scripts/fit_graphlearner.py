@@ -18,35 +18,39 @@ if __name__ == '__main__':
     g_learner_sett = {}
 
     # General
-    n_iter = 4
-    do_plot_performance_while_logging = True
-    calc_bias = True
+    do_plot_performance_while_logging = False
 
     # Path
-    data_load_path = os.path.join('..', 'data', 'coat')
+    data_load_path = os.path.join('..', 'data', 'monday_offers')
     graph_load_path = os.path.join('..', 'results', 'graphs')
 
     save_path = os.path.join('..', 'results', 'graphlearners')
     os.makedirs(save_path, exist_ok=True)
 
     # Dataset
-    dataset_sett['dataset_name'] = 'coat'
-    # dataset_sett['part'] = 4
-    dataset_sett['do_transpose'] = False
+    dataset_sett['dataset_name'] = 'monday_offers'
+    # dataset_sett['part'] = 3
+    dataset_sett['do_transpose'] = True
 
     # Graph
-    graph_sett['min_num_common_items'] = 6
-    graph_sett['max_degree'] = 3
+    graph_sett['min_num_common_items'] = 10
+    graph_sett['max_degree'] = 5
 
     # GraphLearner
     # g_learner_sett['max_distance_to_rated'] = 1
-    # g_learner_sett['l2_lambda_x'] = 0
-    # g_learner_sett['gamma'] = 10
-    g_learner_sett['l2_lambda_s'] = 1
+    # g_learner_sett['gamma'] = 1
+    # g_learner_sett['max_nfev_x'] = 3
     g_learner_sett['beta'] = 100
     g_learner_sett['eps_x'] = 1e-2
-    g_learner_sett['verbose_x'] = False
-    verbose_g_learner = True
+    g_learner_sett['l2_lambda_s'] = 10
+
+    verbose_x = True
+    verbose_s = True
+
+    # Coordinate Descent
+    n_iter = 2
+    calc_bias = False
+    verbose_cd = True
 
     # ----- Load graph -----
     print('Loading graph ...')
@@ -70,7 +74,7 @@ if __name__ == '__main__':
     graph_learner = GraphMatrixCompletion.from_graph_object(graph, user_item_is_rated_mat)
 
     # Fit the ks stats
-    print('Fitting KS-statistics ...')
+    # print('Fitting KS-statistics ...')
     # graph_learner.fit_ks_statistics(rat_mat=rating_mat_tr)
 
     # Logger
@@ -90,10 +94,12 @@ if __name__ == '__main__':
            rat_mat_va=rating_mat_va,
            rat_mat_te=rating_mat_te,
            n_iter=n_iter,
-           verbose=verbose_g_learner,
+           verbose=verbose_cd,
            min_val=graph_dic['ext']['dataset']['min_value'],
            max_val=graph_dic['ext']['dataset']['max_value'],
-           calc_bias=True,
+           calc_bias=calc_bias,
+           verbose_x=verbose_x,
+           verbose_s=verbose_s,
            **g_learner_sett)
 
     # ----- Save to file -----
@@ -101,8 +107,8 @@ if __name__ == '__main__':
     save_dic.update(graph_sett)
     save_dic.update(dataset_sett)
     graph_learner.save_to_file(savepath=save_path,
-                               file_name='graphlearner' + Logger.stringify(save_dic),
-                               ext_dic={'dataset': dataset_sett})
+                               filename='graphlearner' + Logger.stringify(save_dic),
+                               ext_dic=graph_dic['ext'])
 
     # ----- Plotting -----
     plt.figure()
@@ -129,3 +135,8 @@ if __name__ == '__main__':
     plt.subplot(2, 2, 4)
     plt.plot(rating_mat_te[mask_te], rating_mat_pr[mask_te], 'k*')
     plt.title('S times x (test)')
+
+    pr = (cd.g_learner.x_mat[-9:-1] > 0.5)*1
+    te = rating_mat_te[-8:]
+    mask_te = ~np.isnan(te)
+    print(np.mean(pr[mask_te] == te[mask_te]))
