@@ -200,6 +200,6 @@ def get_rating_mat(edges, n_user, n_item):
 
 
 if __name__ == '__main__':
-    load_path = os.path.join('..', '..', 'data', 'monday_offers')
+    load_path = os.path.join('..', '..', 'data', 'ml-100k')
 
     rating_mat_tr, rating_mat_va, rating_mat_te, n_u, n_i = load_dataset(load_path, 'monday_offers', 0.2, 0.1)
