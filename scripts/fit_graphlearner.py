@@ -21,34 +21,34 @@ if __name__ == '__main__':
     do_plot_performance_while_logging = False
 
     # Path
-    data_load_path = os.path.join('..', 'data', 'monday_offers')
+    data_load_path = os.path.join('..', 'data', 'ml-100k')
     graph_load_path = os.path.join('..', 'results', 'graphs')
 
     save_path = os.path.join('..', 'results', 'graphlearners')
     os.makedirs(save_path, exist_ok=True)
 
     # Dataset
-    dataset_sett['dataset_name'] = 'monday_offers'
-    # dataset_sett['part'] = 3
-    dataset_sett['do_transpose'] = True
+    dataset_sett['dataset_name'] = 'ml-100k'
+    dataset_sett['part'] = 3
+    dataset_sett['do_transpose'] = False
 
     # Graph
-    graph_sett['min_num_common_items'] = 10
-    graph_sett['max_degree'] = 5
+    graph_sett['min_num_common_items'] = 8
+    graph_sett['max_degree'] = 3
 
     # GraphLearner
-    # g_learner_sett['max_distance_to_rated'] = 1
-    # g_learner_sett['gamma'] = 1
-    # g_learner_sett['max_nfev_x'] = 3
+    g_learner_sett['max_distance_to_rated'] = 1
+    # g_learner_sett['gamma'] = 10
+    g_learner_sett['max_nfev_x'] = 10
     g_learner_sett['beta'] = 100
     g_learner_sett['eps_x'] = 1e-2
-    g_learner_sett['l2_lambda_s'] = 10
+    g_learner_sett['l2_lambda_s'] = 1
 
     verbose_x = True
     verbose_s = True
 
     # Coordinate Descent
-    n_iter = 2
+    n_iter = 15
     calc_bias = False
     verbose_cd = True
 
@@ -110,6 +110,7 @@ if __name__ == '__main__':
                                filename='graphlearner' + Logger.stringify(save_dic),
                                ext_dic=graph_dic['ext'])
 
+    # print('first : %d and last : %d' % (graph_learner.coefs[0], graph_learner.coefs[1]))
     # ----- Plotting -----
     plt.figure()
 
@@ -136,7 +137,7 @@ if __name__ == '__main__':
     plt.plot(rating_mat_te[mask_te], rating_mat_pr[mask_te], 'k*')
     plt.title('S times x (test)')
 
-    pr = (cd.g_learner.x_mat[-9:-1] > 0.5)*1
-    te = rating_mat_te[-8:]
-    mask_te = ~np.isnan(te)
-    print(np.mean(pr[mask_te] == te[mask_te]))
+    # pr = (cd.g_learner.x_mat[-9:-1] > 0.5)*1
+    # te = rating_mat_te[-8:]
+    # mask_te = ~np.isnan(te)
+    # print(np.mean(pr[mask_te] == te[mask_te]))

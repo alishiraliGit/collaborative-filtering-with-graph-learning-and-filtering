@@ -60,8 +60,8 @@ class GraphLearningCD:
 
             # Update s_mat
             if verbose:
-                print('Updating s_mat ...')
-            self.g_learner.fit_shift_operator(**kwargs)
+                print('Updating coefs of S mat ...')
+            self.g_learner.fit_shift_coefs(**kwargs)
 
             rat_mat_pr = self.g_learner.predict(self.g_learner.x_mat)
 

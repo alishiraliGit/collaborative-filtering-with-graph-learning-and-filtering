@@ -30,8 +30,8 @@ if __name__ == '__main__':
     dataset_sett['do_transpose'] = False
 
     # Graph
-    graph_sett['min_num_common_items'] = 5
-    graph_sett['max_degree'] = 4
+    graph_sett['min_num_common_items'] = 8
+    graph_sett['max_degree'] = 3
 
     assert graph_sett['max_degree'] <= graph_sett['min_num_common_items']
 
@@ -55,6 +55,6 @@ if __name__ == '__main__':
 
     # ----- Save to file -----
     print('Saving graph to file ...')
-    # graph.save_to_file(save_path=save_path,
-    #                   file_name='graph' + Logger.stringify(save_dic),
-    #                   ext_dic={'dataset': dataset_sett})
+    graph.save_to_file(save_path=save_path,
+                      file_name='graph' + Logger.stringify(save_dic),
+                      ext_dic={'dataset': dataset_sett})

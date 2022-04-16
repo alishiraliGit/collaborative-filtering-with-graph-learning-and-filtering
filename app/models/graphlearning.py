@@ -21,12 +21,18 @@ class GraphLearnerBase(Model, abc.ABC):
 
         self.x_mat = None  # [(n_user + 1) x n_item]
 
+        self.coefs = None
+
     @staticmethod
     def from_graph_object(g: Graph, ui_is_rated_mat):
         pass
 
     @abc.abstractmethod
     def fit_shift_operator(self, **kwargs):
+        pass
+
+    @abc.abstractmethod
+    def fit_shift_coefs(self, **kwargs):
         pass
 
     @abc.abstractmethod
@@ -67,8 +73,8 @@ class GraphLearner(GraphLearnerBase):
 
         n_in_edge[n_in_edge == 0] = 1
 
-        b_normalized = np.sum(g.b_mat, axis=1)/n_in_edge
-        w_normalized_mat = np.diag(1/n_in_edge).dot(g.w_mat)
+        b_normalized = np.sum(g.b_mat, axis=1) / n_in_edge
+        w_normalized_mat = np.diag(1 / n_in_edge).dot(g.w_mat)
 
         s_mat[:n_user, :n_user] = w_normalized_mat
         s_mat[:n_user, n_user] = b_normalized
@@ -105,6 +111,86 @@ class GraphLearner(GraphLearnerBase):
             # Fill the s_mat
             self.s_mat[u, idx_s_u] = s_u[:, 0]
 
+    # my ADded Function
+    def fit_shift_coefs(self, l2_lambda_s=0., verbose_s=True, weights=np.array([1]), max_nfev_x=3, **kwargs):
+
+        n_user = self._n_user
+        # Getting SVD
+        u, sigma1, vt = np.linalg.svd(self.s_mat)
+        sigma = np.zeros((self.s_mat.shape[0], self.s_mat.shape[1]))
+
+        # Note that number of non-zero singular values is at most as much as minimum of row and column dimenstions (
+        # Proof is straight-fprward)
+        sigma[:min(self.s_mat.shape[0], self.s_mat.shape[1]), :min(self.s_mat.shape[0], self.s_mat.shape[1])] = np.diag(
+            sigma1)
+        # This part can be variational but I considered half of singular values for high-freq and rest for low-freq
+        mid = len(sigma1) // 2
+        s_high = u[:, :mid].dot(sigma[:mid, :mid].dot(vt[:mid, :]))
+        s_low = u[:, mid:].dot(sigma[mid:, mid:].dot(vt[mid:, :]))
+        weights_u = weights
+
+        # since I'm gonna use a for loop to concatenate all the users I initialize the first one here to have a
+        # source varaible tp concatenate others to it
+        u = 0
+        # Getting Connected USers
+        users_u = np.where(self._adj_mat[u] == 1)[0]
+        idx_s_u = np.concatenate((users_u, [n_user]))
+
+        # Getting rated items
+        items_u = np.where(self._ui_is_rated_mat[u])[0]
+
+        # Rating matrix for connected users and rated items
+        x_mat_u = self.x_mat[idx_s_u][:, items_u]
+
+        # ratings of user number (0) for his rated items
+        x_u = self.x_mat[u, items_u]
+
+        # I transposed the whole forumula your wrote on the whiteboard the other day so we have the Ax=b standard LS
+        # form
+        upper = (s_high[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
+        lower = (s_low[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
+
+        # rhs stands for the right-hand-side of the formula we agreed on or (b) in Ax=b formula
+        rhs = x_u.reshape(-1, 1)
+
+        # Concatenating other users
+        for u in tqdm(range(1, n_user), disable=not verbose_s):
+            # Extract sub-matrices
+            users_u = np.where(self._adj_mat[u] == 1)[0]
+            idx_s_u = np.concatenate((users_u, [n_user]))
+
+            items_u = np.where(self._ui_is_rated_mat[u])[0]
+
+            x_mat_u = self.x_mat[idx_s_u][:, items_u]
+
+            x_u = self.x_mat[u, items_u]
+
+            upper_temp = (s_high[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
+            lower_temp = (s_low[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
+            rhs_temp = x_u.reshape(-1, 1)
+
+            upper = np.concatenate((upper, upper_temp), axis=0)
+            lower = np.concatenate((lower, lower_temp), axis=0)
+            rhs = np.concatenate((rhs, rhs_temp), axis=0)
+
+        # putting both parts beside each other as columns of A matrix in Ax=b formula
+        c = np.concatenate((upper, lower), axis=1)
+
+        # Least square estimation
+        coefs = ls(c, rhs, l2_lambda=l2_lambda_s, weights=weights_u)
+        coefs = coefs[:, 0].reshape(-1, 1)
+        self.coefs = coefs
+
+        print('first : %.3f and last : %0.3f' % (coefs[0], coefs[1]))
+
+        # updating the Main S matrix with new Coefs
+        for u in tqdm(range(n_user), disable=not verbose_s):
+            # Extract sub-matrices
+            users_u = np.where(self._adj_mat[u] == 1)[0]
+            idx_s_u = np.concatenate((users_u, [n_user]))
+
+            self.s_mat[u, idx_s_u] = coefs[0] * s_high[u, idx_s_u] + coefs[1] * s_low[u, idx_s_u]
+
     def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, gamma=0., max_nfev_x=3,
               verbose_x=True, **kwargs):
 
@@ -119,9 +205,10 @@ class GraphLearner(GraphLearnerBase):
             rated_users_i = np.concatenate((rated_users_wo_bias_i, [n_user]))
 
             # Find the unrated users which are far from rated users
-            rated_users_one_hot = self._ui_is_rated_mat[:, it]*1
-            adj_d_mat = self._adj_mat + self._adj_mat.T + np.eye(n_user)
+            rated_users_one_hot = self._ui_is_rated_mat[:, it] * 1
+            adj_d_mat = self._adj_mat + self._adj_mat.T
             n_connected_rated = adj_d_mat.dot(rated_users_one_hot.reshape((-1, 1)))
+
             for _ in range(1, max_distance_to_rated):
                 n_connected_rated = adj_d_mat.dot(n_connected_rated)
 
@@ -145,11 +232,11 @@ class GraphLearner(GraphLearnerBase):
 
             # Add stability term
             y_i_extended = np.concatenate(
-                (y_i, np.sqrt(gamma)*np.mean(self.x_mat[unrated_users_i], axis=1).reshape((-1, 1))),
+                (y_i, np.sqrt(gamma) * np.mean(self.x_mat[unrated_users_i], axis=1).reshape((-1, 1))),
                 axis=0
             )
             s_unrated_i_extended_mat = \
-                np.concatenate((s_unrated_i_mat, np.sqrt(gamma)*np.eye(n_unrated_users_i)), axis=0)
+                np.concatenate((s_unrated_i_mat, np.sqrt(gamma) * np.eye(n_unrated_users_i)), axis=0)
 
             # Least square estimation
             x_unrated_i = self.x_mat[unrated_users_i, it:(it + 1)]
@@ -184,6 +271,23 @@ class GraphLearner(GraphLearnerBase):
                             x0=x_0,
                             args=(s_unrated_mat, y),
                             bounds=(min_val, max_val),
+                            method=method,
+                            loss=loss,
+                            f_scale=f_scale,
+                            max_nfev=max_nfev,
+                            verbose=verbose,
+                            **kwargs)
+
+        return res.x.reshape((-1, 1))
+
+    @staticmethod
+    def ls2(x_0, s_unrated_mat, y, max_nfev,
+            method='trf', loss='linear', f_scale=1, verbose=0, **kwargs):
+
+        res = least_squares(fun=GraphLearner.ls_fun,
+                            jac=GraphLearner.ls_jac,
+                            x0=x_0,
+                            args=(s_unrated_mat, y),
                             method=method,
                             loss=loss,
                             f_scale=f_scale,
@@ -268,7 +372,7 @@ class CounterfactualGraphLearner(GraphLearnerBase):
                 ks[o_it] = 0.5
                 continue
 
-            ks[o_it] = ks_2samp(rated_vals_o, unrated_vals_o).statistic/2
+            ks[o_it] = ks_2samp(rated_vals_o, unrated_vals_o).statistic / 2
 
         return ks
 
@@ -360,6 +464,15 @@ class GraphMatrixCompletion(GraphLearnerBase):
 
         self.s_mat = g_learner.s_mat
 
+    def fit_shift_coefs(self, **kwargs):
+        g_learner = GraphLearner(adj_mat=self._adj_mat, ui_is_rated_mat=self._ui_is_rated_mat)
+        g_learner.x_mat = self.x_mat
+        g_learner.s_mat = self.s_mat
+
+        g_learner.fit_shift_coefs(**kwargs)
+
+        self.s_mat = g_learner.s_mat
+
     def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **kwargs):
         s_tilde_mat = (self.s_mat.T - np.eye(self._n_user + 1)).dot(self.s_mat - np.eye(self._n_user + 1))
 
@@ -376,7 +489,7 @@ class GraphMatrixCompletion(GraphLearnerBase):
 
             # Gradient descent
             g_k = np.concatenate((unvectorize(-p_k, n_row=self._n_user), np.zeros((1, self._n_item))), axis=0)
-            x_new_mat = self.x_mat - t*g_k
+            x_new_mat = self.x_mat - t * g_k
 
             # Proximate
             x_prox_mat = self.proximate(x_new_mat, t, beta)
@@ -385,7 +498,7 @@ class GraphMatrixCompletion(GraphLearnerBase):
             x_proj_mat = self.project(self.x_mat, x_prox_mat, self._ui_is_rated_mat)
 
             # Check the stopping criterion
-            eps_x_k = np.linalg.norm(x_proj_mat - self.x_mat)/np.linalg.norm(self.x_mat)
+            eps_x_k = np.linalg.norm(x_proj_mat - self.x_mat) / np.linalg.norm(self.x_mat)
             if eps_x_k < eps_x:
                 self.x_mat = x_proj_mat
                 break
@@ -416,25 +529,25 @@ class GraphMatrixCompletion(GraphLearnerBase):
         x_wo_ones_mat = unvectorize(x, s_mat.shape[0] - 1)
         x_mat = np.concatenate((x_wo_ones_mat, np.ones((1, x_wo_ones_mat.shape[1]))), axis=0)
 
-        return np.linalg.norm((s_mat - np.eye(s_mat.shape[0])).dot(x_mat))**2
+        return np.linalg.norm((s_mat - np.eye(s_mat.shape[0])).dot(x_mat)) ** 2
 
     @staticmethod
     def jac_s2(x, _s_mat, s_tilde_mat):
         x_wo_ones_mat = unvectorize(x, s_tilde_mat.shape[0] - 1)
         x_mat = np.concatenate((x_wo_ones_mat, np.ones((1, x_wo_ones_mat.shape[1]))), axis=0)
 
-        return vectorize(2*s_tilde_mat.dot(x_mat)[:-1])
+        return vectorize(2 * s_tilde_mat.dot(x_mat)[:-1])
 
     @staticmethod
     def proximate(x_mat, t, beta):
-        tau = t*beta
+        tau = t * beta
 
         rank_x = np.linalg.matrix_rank(x_mat)
 
         n_svd_comp = 3
         u_mat, s, vh_mat = randomized_svd(x_mat, n_components=n_svd_comp)
         while (s[-1] > tau) and (n_svd_comp < rank_x):
-            n_svd_comp = np.max([2*n_svd_comp, rank_x])
+            n_svd_comp = np.max([2 * n_svd_comp, rank_x])
             u_mat, s, vh_mat = randomized_svd(x_mat, n_components=n_svd_comp)
         # ToDo
         # print('_proximate: %d components was enough' % n_svd_comp)
@@ -524,7 +637,7 @@ class CounterfactualGraphMatrixCompletion(GraphLearnerBase):
 
             # Gradient descent
             g_k = np.concatenate((unvectorize(-p_k, n_row=self._n_user), np.zeros((1, self._n_item))), axis=0)
-            x_new_mat = self.x_mat - t*g_k
+            x_new_mat = self.x_mat - t * g_k
 
             # Proximate
             x_prox_mat = GraphMatrixCompletion.proximate(x_new_mat, t, beta)
@@ -533,7 +646,7 @@ class CounterfactualGraphMatrixCompletion(GraphLearnerBase):
             x_proj_mat = GraphMatrixCompletion.project(self.x_mat, x_prox_mat, self._ui_is_rated_mat)
 
             # Check the stopping criterion
-            eps_x_k = np.linalg.norm(x_proj_mat - self.x_mat)/np.linalg.norm(self.x_mat)
+            eps_x_k = np.linalg.norm(x_proj_mat - self.x_mat) / np.linalg.norm(self.x_mat)
 
             self.cg_learner.x_mat = x_proj_mat
             self.x_mat = x_proj_mat
