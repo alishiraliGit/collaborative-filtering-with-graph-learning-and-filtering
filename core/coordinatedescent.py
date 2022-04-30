@@ -1,8 +1,8 @@
 import numpy as np
 
-from app.models.graphlearning import GraphLearnerBase
+from app.models.graphlearning import GraphLearnerBase, GraphMatrixCompletion
 from app.utils.log import Logger
-from app.utils.mathtools import rmse
+from app.utils.mathtools import rmse, ACLT
 
 
 class GraphLearningCD:
@@ -75,3 +75,22 @@ class GraphLearningCD:
                 self.logger_s.log(rmse_tr, rmse_va, rmse_te, bias_tr, bias_va, bias_te, log_bias=True)
             else:
                 self.logger_s.log(rmse_tr, rmse_va, rmse_te)
+
+    def k_trial(self, graph: GraphMatrixCompletion, rat_mat_te,  **kwargs):
+        results = []
+        precisions = []
+        k_values = [4,5,6.65, 10, 15, 20, 25]
+        # k_values = [0.01, 0.1, 0.2, 0.3, 0.35, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+        test_mat = (~np.isnan(rat_mat_te) * 1)
+        for k in k_values:
+            graph.k_predict(k)
+            graph.fit_x(**kwargs)
+            result, precision = ACLT(graph.x_mat[:-1], rat_mat_te, graph.long, graph.short)
+            results += [result]
+            precisions += [precision]
+            # graph.fit_shift_coefss(**kwargs)
+            # graph.fit_x(**kwargs)
+            # result, precision = ACLT(graph.x_mat[:-1], rat_mat_te, graph.long, graph.short)
+            # results += [result]
+            # precisions += [precision]
+        return results, precisions
