@@ -19,6 +19,8 @@ class GraphLearnerBase(Model, abc.ABC):
         self._ui_is_rated_mat = ui_is_rated_mat  # [n_user x n_item]
         self._n_user, self._n_item = ui_is_rated_mat.shape
 
+        self.long = None
+        self.short = None
         self.x_mat = None  # [(n_user + 1) x n_item]
 
         self.coefs = None
@@ -57,6 +59,8 @@ class GraphLearner(GraphLearnerBase):
         super().__init__(adj_mat, ui_is_rated_mat)
 
         self.s_mat = None  # [(n_user + 1) x (n_user + 1)]
+        self.sh = None
+        self.sl = None
 
     @staticmethod
     def from_graph_object(g: Graph, ui_is_rated_mat):
@@ -126,7 +130,9 @@ class GraphLearner(GraphLearnerBase):
         # This part can be variational but I considered half of singular values for high-freq and rest for low-freq
         mid = len(sigma1) // 2
         s_high = u[:, :mid].dot(sigma[:mid, :mid].dot(vt[:mid, :]))
+        self.sh = s_high
         s_low = u[:, mid:].dot(sigma[mid:, mid:].dot(vt[mid:, :]))
+        self.sl = s_low
         weights_u = weights
 
         # since I'm gonna use a for loop to concatenate all the users I initialize the first one here to have a
@@ -300,6 +306,10 @@ class GraphLearner(GraphLearnerBase):
     def predict(self, x_mat, **kwargs):
         return self.s_mat.dot(x_mat)[:-1]
 
+    def k_predict(self, k, **kwargs):
+        # return k * self.sh.dot(x_mat)[:-1] + (1 - k) * self.sl.dot(x_mat)[:-1]
+        self.s_mat = (1 - k) * self.sh + (k) * self.sl
+
     def save_to_file(self, savepath, filename, ext_dic=None):
         dic = {
             'x_mat': self.x_mat,
@@ -442,7 +452,9 @@ class GraphMatrixCompletion(GraphLearnerBase):
         super().__init__(adj_mat, ui_is_rated_mat)
 
         self.s_mat = None  # [(n_user + 1) x (n_user + 1)]
-
+        self.sl = None
+        self.sh = None
+        self.coefsp = None
         self.s_tilde_mat = None
 
     @staticmethod
@@ -472,6 +484,78 @@ class GraphMatrixCompletion(GraphLearnerBase):
         g_learner.fit_shift_coefs(**kwargs)
 
         self.s_mat = g_learner.s_mat
+        self.sl = g_learner.sl
+        self.sh = g_learner.sh
+
+    def fit_shift_coefss(self, l2_lambda_s=0., verbose_s=True, weights=np.array([1]), max_nfev_x=3, **kwargs):
+
+        n_user = self._n_user
+        # Getting SVD
+
+        weights_u = weights
+
+        # since I'm gonna use a for loop to concatenate all the users I initialize the first one here to have a
+        # source varaible tp concatenate others to it
+        u = 0
+        # Getting Connected USers
+        users_u = np.where(self._adj_mat[u] == 1)[0]
+        idx_s_u = np.concatenate((users_u, [n_user]))
+
+        # Getting rated items
+        items_u = np.where(self._ui_is_rated_mat[u])[0]
+
+        # Rating matrix for connected users and rated items
+        x_mat_u = self.x_mat[idx_s_u][:, items_u]
+
+        # ratings of user number (0) for his rated items
+        x_u = self.x_mat[u, items_u]
+
+        # I transposed the whole forumula your wrote on the whiteboard the other day so we have the Ax=b standard LS
+        # form
+        upper = (self.s_mat[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
+
+        # rhs stands for the right-hand-side of the formula we agreed on or (b) in Ax=b formula
+        rhs = x_u.reshape(-1, 1)
+
+        # Concatenating other users
+        for u in tqdm(range(1, n_user), disable=not verbose_s):
+            # Extract sub-matrices
+            users_u = np.where(self._adj_mat[u] == 1)[0]
+            idx_s_u = np.concatenate((users_u, [n_user]))
+
+            items_u = np.where(self._ui_is_rated_mat[u])[0]
+
+            x_mat_u = self.x_mat[idx_s_u][:, items_u]
+
+            x_u = self.x_mat[u, items_u]
+
+            upper_temp = (self.s_mat[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
+            rhs_temp = x_u.reshape(-1, 1)
+
+            upper = np.concatenate((upper, upper_temp), axis=0)
+            rhs = np.concatenate((rhs, rhs_temp), axis=0)
+
+        # putting both parts beside each other as columns of A matrix in Ax=b formula
+        c = np.concatenate((upper, np.ones((upper.shape[0], 1))), axis=1)
+
+        # Least square estimation
+        coefs = ls(c, rhs, l2_lambda=l2_lambda_s, weights=weights_u)
+        coefs = coefs[:, 0].reshape(-1, 1)
+        self.coefsp = coefs
+
+        # print('first : %.3f and last : %0.3f' % (coefs[0], coefs[1]))
+
+        # updating the Main S matrix with new Coefs
+        for u in tqdm(range(n_user), disable=not verbose_s):
+            # Extract sub-matrices
+            users_u = np.where(self._adj_mat[u] == 1)[0]
+            idx_s_u = np.concatenate((users_u, [n_user]))
+
+            self.s_mat[u, idx_s_u] = coefs[0] * self.s_mat[u, idx_s_u] + coefs[1] * np.ones((1, idx_s_u.shape[0]))
+
+    def k_predict(self, k, **kwargs):
+        # return k * self.sh.dot(x_mat)[:-1] + (1 - k) * self.sl.dot(x_mat)[:-1]
+        self.s_mat = self.sh + (k) * self.sl
 
     def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **kwargs):
         s_tilde_mat = (self.s_mat.T - np.eye(self._n_user + 1)).dot(self.s_mat - np.eye(self._n_user + 1))

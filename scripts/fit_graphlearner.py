@@ -5,11 +5,10 @@ from matplotlib import pyplot as plt
 from app.transformers.graph import Graph
 from app.models.graphlearning import GraphLearner, CounterfactualGraphLearner, GraphMatrixCompletion, \
     CounterfactualGraphMatrixCompletion
-from app.utils.mathtools import fill_with_row_means
+from app.utils.mathtools import fill_with_row_means, percentile_calculator, ACLT
 from app.utils.log import Logger
 from app.utils.data_handler import load_dataset
 from core.coordinatedescent import GraphLearningCD
-
 
 if __name__ == '__main__':
     # ----- Settings -----
@@ -48,7 +47,7 @@ if __name__ == '__main__':
     verbose_s = True
 
     # Coordinate Descent
-    n_iter = 15
+    n_iter = 2
     calc_bias = False
     verbose_cd = True
 
@@ -71,7 +70,10 @@ if __name__ == '__main__':
 
     # Graph learner
     user_item_is_rated_mat = ~np.isnan(rating_mat_tr)
+    long, short = percentile_calculator(rating_mat_tr)
     graph_learner = GraphMatrixCompletion.from_graph_object(graph, user_item_is_rated_mat)
+    graph_learner.long = long
+    graph_learner.short = short
 
     # Fit the ks stats
     # print('Fitting KS-statistics ...')
@@ -81,7 +83,7 @@ if __name__ == '__main__':
     log_sett = g_learner_sett.copy()
     log_sett.update(graph_sett)
     log_sett.update(dataset_sett)
-    logger_x = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='x')
+    logger_x = Logger(settings=log_sett , save_path=save_path, do_plot=do_plot_performance_while_logging, title='x')
     logger_s = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='Sx')
 
     # ----- Coordinate descent -----
@@ -110,32 +112,49 @@ if __name__ == '__main__':
                                filename='graphlearner' + Logger.stringify(save_dic),
                                ext_dic=graph_dic['ext'])
 
+
+
+
+    ## Newly added part
+    results, precision = cd.k_trial(graph = graph_learner,
+               rat_mat_te=rating_mat_te,
+               min_val=graph_dic['ext']['dataset']['min_value'],
+               max_val=graph_dic['ext']['dataset']['max_value'],
+               calc_bias=calc_bias,
+               verbose_x=verbose_x,
+               verbose_s=verbose_s,
+               **g_learner_sett)
     # print('first : %d and last : %d' % (graph_learner.coefs[0], graph_learner.coefs[1]))
     # ----- Plotting -----
-    plt.figure()
 
-    mask_tr = ~np.isnan(rating_mat_tr)
-    mask_te = ~np.isnan(rating_mat_te)
 
-    rating_mat_pr = graph_learner.x_mat[:-1]
 
-    plt.subplot(2, 2, 1)
-    plt.plot(rating_mat_tr[mask_tr], rating_mat_pr[mask_tr], 'k*')
-    plt.title('x (train)')
+    for i in range(7):
+        print(f"{results[i], precision[i]} \n -------------------- \n")
+    # plt.figure()
+    #
+    # mask_tr = ~np.isnan(rating_mat_tr)
+    # mask_te = ~np.isnan(rating_mat_te)
+    #
+    # rating_mat_pr = graph_learner.x_mat[:-1]
+    #
+    # plt.subplot(2, 2, 1)
+    # plt.plot(rating_mat_tr[mask_tr], rating_mat_pr[mask_tr], 'k*')
+    # plt.title('x (train)')
+    #
+    # plt.subplot(2, 2, 2)
+    # plt.plot(rating_mat_te[mask_te], rating_mat_pr[mask_te], 'k*')
+    # plt.title('x (test)')
 
-    plt.subplot(2, 2, 2)
-    plt.plot(rating_mat_te[mask_te], rating_mat_pr[mask_te], 'k*')
-    plt.title('x (test)')
-
-    rating_mat_pr = graph_learner.predict(graph_learner.x_mat)
-
-    plt.subplot(2, 2, 3)
-    plt.plot(rating_mat_tr[mask_tr], rating_mat_pr[mask_tr], 'k*')
-    plt.title('S times x (train)')
-
-    plt.subplot(2, 2, 4)
-    plt.plot(rating_mat_te[mask_te], rating_mat_pr[mask_te], 'k*')
-    plt.title('S times x (test)')
+    # rating_mat_pr = graph_learner.predict(graph_learner.x_mat)
+    #
+    # plt.subplot(2, 2, 3)
+    # plt.plot(rating_mat_tr[mask_tr], rating_mat_pr[mask_tr], 'k*')
+    # plt.title('S times x (train)')
+    #
+    # plt.subplot(2, 2, 4)
+    # plt.plot(rating_mat_te[mask_te], rating_mat_pr[mask_te], 'k*')
+    # plt.title('S times x (test)')
 
     # pr = (cd.g_learner.x_mat[-9:-1] > 0.5)*1
     # te = rating_mat_te[-8:]
