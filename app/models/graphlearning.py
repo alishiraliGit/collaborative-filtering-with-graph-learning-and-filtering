@@ -23,18 +23,12 @@ class GraphLearnerBase(Model, abc.ABC):
         self.short = None
         self.x_mat = None  # [(n_user + 1) x n_item]
 
-        self.coefs = None
-
     @staticmethod
     def from_graph_object(g: Graph, ui_is_rated_mat):
         pass
 
     @abc.abstractmethod
     def fit_shift_operator(self, **kwargs):
-        pass
-
-    @abc.abstractmethod
-    def fit_shift_coefs(self, **kwargs):
         pass
 
     @abc.abstractmethod
@@ -59,8 +53,6 @@ class GraphLearner(GraphLearnerBase):
         super().__init__(adj_mat, ui_is_rated_mat)
 
         self.s_mat = None  # [(n_user + 1) x (n_user + 1)]
-        self.sh = None
-        self.sl = None
 
     @staticmethod
     def from_graph_object(g: Graph, ui_is_rated_mat):
@@ -93,7 +85,7 @@ class GraphLearner(GraphLearnerBase):
         self.s_mat = np.zeros((n_user + 1, n_user + 1))
         self.s_mat[n_user, n_user] = 1
 
-        for u in tqdm(range(n_user), disable=not verbose_s):
+        for u in tqdm(range(n_user), disable=not verbose_s, desc='GraphLearner:fit_shift_operator'):
             # Extract sub-matrices
             users_u = np.where(self._adj_mat[u] == 1)[0]
             idx_s_u = np.concatenate((users_u, [n_user]))
@@ -115,88 +107,6 @@ class GraphLearner(GraphLearnerBase):
             # Fill the s_mat
             self.s_mat[u, idx_s_u] = s_u[:, 0]
 
-    # my ADded Function
-    def fit_shift_coefs(self, l2_lambda_s=0., verbose_s=True, weights=np.array([1]), max_nfev_x=3, **kwargs):
-
-        n_user = self._n_user
-        # Getting SVD
-        u, sigma1, vt = np.linalg.svd(self.s_mat)
-        sigma = np.zeros((self.s_mat.shape[0], self.s_mat.shape[1]))
-
-        # Note that number of non-zero singular values is at most as much as minimum of row and column dimenstions (
-        # Proof is straight-fprward)
-        sigma[:min(self.s_mat.shape[0], self.s_mat.shape[1]), :min(self.s_mat.shape[0], self.s_mat.shape[1])] = np.diag(
-            sigma1)
-        # This part can be variational but I considered half of singular values for high-freq and rest for low-freq
-        mid = len(sigma1) // 2
-        s_high = u[:, :mid].dot(sigma[:mid, :mid].dot(vt[:mid, :]))
-        self.sh = s_high
-        s_low = u[:, mid:].dot(sigma[mid:, mid:].dot(vt[mid:, :]))
-        self.sl = s_low
-        weights_u = weights
-
-        # since I'm gonna use a for loop to concatenate all the users I initialize the first one here to have a
-        # source varaible tp concatenate others to it
-        u = 0
-        # Getting Connected USers
-        users_u = np.where(self._adj_mat[u] == 1)[0]
-        idx_s_u = np.concatenate((users_u, [n_user]))
-
-        # Getting rated items
-        items_u = np.where(self._ui_is_rated_mat[u])[0]
-
-        # Rating matrix for connected users and rated items
-        x_mat_u = self.x_mat[idx_s_u][:, items_u]
-
-        # ratings of user number (0) for his rated items
-        x_u = self.x_mat[u, items_u]
-
-        # I transposed the whole forumula your wrote on the whiteboard the other day so we have the Ax=b standard LS
-        # form
-        upper = (s_high[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
-        lower = (s_low[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
-
-        # rhs stands for the right-hand-side of the formula we agreed on or (b) in Ax=b formula
-        rhs = x_u.reshape(-1, 1)
-
-        # Concatenating other users
-        for u in tqdm(range(1, n_user), disable=not verbose_s):
-            # Extract sub-matrices
-            users_u = np.where(self._adj_mat[u] == 1)[0]
-            idx_s_u = np.concatenate((users_u, [n_user]))
-
-            items_u = np.where(self._ui_is_rated_mat[u])[0]
-
-            x_mat_u = self.x_mat[idx_s_u][:, items_u]
-
-            x_u = self.x_mat[u, items_u]
-
-            upper_temp = (s_high[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
-            lower_temp = (s_low[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
-            rhs_temp = x_u.reshape(-1, 1)
-
-            upper = np.concatenate((upper, upper_temp), axis=0)
-            lower = np.concatenate((lower, lower_temp), axis=0)
-            rhs = np.concatenate((rhs, rhs_temp), axis=0)
-
-        # putting both parts beside each other as columns of A matrix in Ax=b formula
-        c = np.concatenate((upper, lower), axis=1)
-
-        # Least square estimation
-        coefs = ls(c, rhs, l2_lambda=l2_lambda_s, weights=weights_u)
-        coefs = coefs[:, 0].reshape(-1, 1)
-        self.coefs = coefs
-
-        print('first : %.3f and last : %0.3f' % (coefs[0], coefs[1]))
-
-        # updating the Main S matrix with new Coefs
-        for u in tqdm(range(n_user), disable=not verbose_s):
-            # Extract sub-matrices
-            users_u = np.where(self._adj_mat[u] == 1)[0]
-            idx_s_u = np.concatenate((users_u, [n_user]))
-
-            self.s_mat[u, idx_s_u] = coefs[0] * s_high[u, idx_s_u] + coefs[1] * s_low[u, idx_s_u]
-
     def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, gamma=0., max_nfev_x=3,
               verbose_x=True, **kwargs):
 
@@ -204,7 +114,7 @@ class GraphLearner(GraphLearnerBase):
 
         new_x_mat = self.x_mat.copy()
 
-        for it in tqdm(range(n_item), disable=not verbose_x):
+        for it in tqdm(range(n_item), disable=not verbose_x, desc='GraphLearner:fit_x'):
             # Extract sub-matrices
             unrated_users_i = np.where(~self._ui_is_rated_mat[:, it])[0]
             rated_users_wo_bias_i = np.where(self._ui_is_rated_mat[:, it])[0]
@@ -286,29 +196,8 @@ class GraphLearner(GraphLearnerBase):
 
         return res.x.reshape((-1, 1))
 
-    @staticmethod
-    def ls2(x_0, s_unrated_mat, y, max_nfev,
-            method='trf', loss='linear', f_scale=1, verbose=0, **kwargs):
-
-        res = least_squares(fun=GraphLearner.ls_fun,
-                            jac=GraphLearner.ls_jac,
-                            x0=x_0,
-                            args=(s_unrated_mat, y),
-                            method=method,
-                            loss=loss,
-                            f_scale=f_scale,
-                            max_nfev=max_nfev,
-                            verbose=verbose,
-                            **kwargs)
-
-        return res.x.reshape((-1, 1))
-
     def predict(self, x_mat, **kwargs):
         return self.s_mat.dot(x_mat)[:-1]
-
-    def k_predict(self, k, **kwargs):
-        # return k * self.sh.dot(x_mat)[:-1] + (1 - k) * self.sl.dot(x_mat)[:-1]
-        self.s_mat = (1 - k) * self.sh + (k) * self.sl
 
     def save_to_file(self, savepath, filename, ext_dic=None):
         dic = {
@@ -452,9 +341,6 @@ class GraphMatrixCompletion(GraphLearnerBase):
         super().__init__(adj_mat, ui_is_rated_mat)
 
         self.s_mat = None  # [(n_user + 1) x (n_user + 1)]
-        self.sl = None
-        self.sh = None
-        self.coefsp = None
         self.s_tilde_mat = None
 
     @staticmethod
@@ -476,87 +362,6 @@ class GraphMatrixCompletion(GraphLearnerBase):
 
         self.s_mat = g_learner.s_mat
 
-    def fit_shift_coefs(self, **kwargs):
-        g_learner = GraphLearner(adj_mat=self._adj_mat, ui_is_rated_mat=self._ui_is_rated_mat)
-        g_learner.x_mat = self.x_mat
-        g_learner.s_mat = self.s_mat
-
-        g_learner.fit_shift_coefs(**kwargs)
-
-        self.s_mat = g_learner.s_mat
-        self.sl = g_learner.sl
-        self.sh = g_learner.sh
-
-    def fit_shift_coefss(self, l2_lambda_s=0., verbose_s=True, weights=np.array([1]), max_nfev_x=3, **kwargs):
-
-        n_user = self._n_user
-        # Getting SVD
-
-        weights_u = weights
-
-        # since I'm gonna use a for loop to concatenate all the users I initialize the first one here to have a
-        # source varaible tp concatenate others to it
-        u = 0
-        # Getting Connected USers
-        users_u = np.where(self._adj_mat[u] == 1)[0]
-        idx_s_u = np.concatenate((users_u, [n_user]))
-
-        # Getting rated items
-        items_u = np.where(self._ui_is_rated_mat[u])[0]
-
-        # Rating matrix for connected users and rated items
-        x_mat_u = self.x_mat[idx_s_u][:, items_u]
-
-        # ratings of user number (0) for his rated items
-        x_u = self.x_mat[u, items_u]
-
-        # I transposed the whole forumula your wrote on the whiteboard the other day so we have the Ax=b standard LS
-        # form
-        upper = (self.s_mat[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
-
-        # rhs stands for the right-hand-side of the formula we agreed on or (b) in Ax=b formula
-        rhs = x_u.reshape(-1, 1)
-
-        # Concatenating other users
-        for u in tqdm(range(1, n_user), disable=not verbose_s):
-            # Extract sub-matrices
-            users_u = np.where(self._adj_mat[u] == 1)[0]
-            idx_s_u = np.concatenate((users_u, [n_user]))
-
-            items_u = np.where(self._ui_is_rated_mat[u])[0]
-
-            x_mat_u = self.x_mat[idx_s_u][:, items_u]
-
-            x_u = self.x_mat[u, items_u]
-
-            upper_temp = (self.s_mat[u, idx_s_u].dot(x_mat_u)).reshape(-1, 1)
-            rhs_temp = x_u.reshape(-1, 1)
-
-            upper = np.concatenate((upper, upper_temp), axis=0)
-            rhs = np.concatenate((rhs, rhs_temp), axis=0)
-
-        # putting both parts beside each other as columns of A matrix in Ax=b formula
-        c = np.concatenate((upper, np.ones((upper.shape[0], 1))), axis=1)
-
-        # Least square estimation
-        coefs = ls(c, rhs, l2_lambda=l2_lambda_s, weights=weights_u)
-        coefs = coefs[:, 0].reshape(-1, 1)
-        self.coefsp = coefs
-
-        # print('first : %.3f and last : %0.3f' % (coefs[0], coefs[1]))
-
-        # updating the Main S matrix with new Coefs
-        for u in tqdm(range(n_user), disable=not verbose_s):
-            # Extract sub-matrices
-            users_u = np.where(self._adj_mat[u] == 1)[0]
-            idx_s_u = np.concatenate((users_u, [n_user]))
-
-            self.s_mat[u, idx_s_u] = coefs[0] * self.s_mat[u, idx_s_u] + coefs[1] * np.ones((1, idx_s_u.shape[0]))
-
-    def k_predict(self, k, **kwargs):
-        # return k * self.sh.dot(x_mat)[:-1] + (1 - k) * self.sl.dot(x_mat)[:-1]
-        self.s_mat = self.sh + (k) * self.sl
-
     def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **kwargs):
         s_tilde_mat = (self.s_mat.T - np.eye(self._n_user + 1)).dot(self.s_mat - np.eye(self._n_user + 1))
 
@@ -565,8 +370,6 @@ class GraphMatrixCompletion(GraphLearnerBase):
         while True:
             if it == max_it:
                 break
-            if verbose_x:
-                print('iter: %d' % it)
 
             # Line-search
             t, p_k = self._line_search_for_t(self.x_mat[:-1], self.s_mat, s_tilde_mat)
@@ -583,13 +386,14 @@ class GraphMatrixCompletion(GraphLearnerBase):
 
             # Check the stopping criterion
             eps_x_k = np.linalg.norm(x_proj_mat - self.x_mat) / np.linalg.norm(self.x_mat)
+
+            if verbose_x:
+                print('it: %d, relative change of x is: %.3f' % (it, eps_x_k))
+
+            self.x_mat = x_proj_mat
+
             if eps_x_k < eps_x:
-                self.x_mat = x_proj_mat
                 break
-            else:
-                if verbose_x:
-                    print('relative change of x is: %.3f' % eps_x_k)
-                self.x_mat = x_proj_mat
 
             it += 1
 

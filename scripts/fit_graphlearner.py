@@ -18,6 +18,7 @@ if __name__ == '__main__':
 
     # General
     do_plot_performance_while_logging = False
+    do_save = True
 
     # Path
     data_load_path = os.path.join('..', 'data', 'ml-100k')
@@ -36,18 +37,22 @@ if __name__ == '__main__':
     graph_sett['max_degree'] = 3
 
     # GraphLearner
-    g_learner_sett['max_distance_to_rated'] = 1
+
+    # Settings for GraphLearner class:
+    # g_learner_sett['max_distance_to_rated'] = 1
     # g_learner_sett['gamma'] = 10
-    g_learner_sett['max_nfev_x'] = 10
+    # g_learner_sett['max_nfev_x'] = 10
+
+    # Settings for GraphMatrixCompletion class:
     g_learner_sett['beta'] = 100
     g_learner_sett['eps_x'] = 1e-2
-    g_learner_sett['l2_lambda_s'] = 1
+    g_learner_sett['l2_lambda_s'] = 10
 
-    verbose_x = True
+    verbose_x = False
     verbose_s = True
 
     # Coordinate Descent
-    n_iter = 2
+    n_iter = 50
     calc_bias = False
     verbose_cd = True
 
@@ -70,10 +75,10 @@ if __name__ == '__main__':
 
     # Graph learner
     user_item_is_rated_mat = ~np.isnan(rating_mat_tr)
-    long, short = percentile_calculator(rating_mat_tr)
+    # long, short = percentile_calculator(rating_mat_tr)
     graph_learner = GraphMatrixCompletion.from_graph_object(graph, user_item_is_rated_mat)
-    graph_learner.long = long
-    graph_learner.short = short
+    # graph_learner.long = long
+    # graph_learner.short = short
 
     # Fit the ks stats
     # print('Fitting KS-statistics ...')
@@ -83,7 +88,7 @@ if __name__ == '__main__':
     log_sett = g_learner_sett.copy()
     log_sett.update(graph_sett)
     log_sett.update(dataset_sett)
-    logger_x = Logger(settings=log_sett , save_path=save_path, do_plot=do_plot_performance_while_logging, title='x')
+    logger_x = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='x')
     logger_s = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='Sx')
 
     # ----- Coordinate descent -----
@@ -105,17 +110,16 @@ if __name__ == '__main__':
            **g_learner_sett)
 
     # ----- Save to file -----
-    save_dic = g_learner_sett.copy()
-    save_dic.update(graph_sett)
-    save_dic.update(dataset_sett)
-    graph_learner.save_to_file(savepath=save_path,
-                               filename='graphlearner' + Logger.stringify(save_dic),
-                               ext_dic=graph_dic['ext'])
+    if do_save:
+        save_dic = g_learner_sett.copy()
+        save_dic.update(graph_sett)
+        save_dic.update(dataset_sett)
+        graph_learner.save_to_file(savepath=save_path,
+                                   filename='graphlearner' + Logger.stringify(save_dic),
+                                   ext_dic=graph_dic['ext'])
 
-
-
-
-    ## Newly added part
+    '''
+    # Newly added part
     results, precision = cd.k_trial(graph = graph_learner,
                rat_mat_te=rating_mat_te,
                min_val=graph_dic['ext']['dataset']['min_value'],
@@ -160,3 +164,4 @@ if __name__ == '__main__':
     # te = rating_mat_te[-8:]
     # mask_te = ~np.isnan(te)
     # print(np.mean(pr[mask_te] == te[mask_te]))
+    '''
