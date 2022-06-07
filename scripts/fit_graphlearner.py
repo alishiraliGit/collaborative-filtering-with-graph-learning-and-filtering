@@ -2,7 +2,7 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
-from app.transformers.graph import Graph
+from app.transformers.graph import Graph, SymmetricGraph
 from app.models.graphlearning import GraphLearner, CounterfactualGraphLearner, GraphMatrixCompletion, \
     CounterfactualGraphMatrixCompletion
 from app.utils.mathtools import fill_with_row_means, percentile_calculator, ACLT
@@ -35,6 +35,7 @@ if __name__ == '__main__':
     # Graph
     graph_sett['min_num_common_items'] = 8
     graph_sett['max_degree'] = 3
+    graph_sett['min_degree'] = 1  # Only for symmetric graphs
 
     # GraphLearner
 
@@ -42,10 +43,11 @@ if __name__ == '__main__':
     # g_learner_sett['max_distance_to_rated'] = 1
     # g_learner_sett['gamma'] = 10
     # g_learner_sett['max_nfev_x'] = 10
+    # g_learner_sett['l2_lambda_s'] = 10
 
     # Settings for GraphMatrixCompletion class:
-    g_learner_sett['beta'] = 100
-    g_learner_sett['eps_x'] = 1e-2
+    g_learner_sett['beta'] = 100  # 100
+    g_learner_sett['eps_x'] = 2e-2  # 1e-2
     g_learner_sett['l2_lambda_s'] = 10
 
     verbose_x = False
@@ -60,8 +62,10 @@ if __name__ == '__main__':
     print('Loading graph ...')
     graph_load_sett = graph_sett.copy()
     graph_load_sett.update(dataset_sett)
-    graph, graph_dic = Graph.load_from_file(load_path=graph_load_path,
-                                            file_name='graph' + Logger.stringify(graph_load_sett))
+    graph, graph_dic = SymmetricGraph.load_from_file(
+        load_path=graph_load_path,
+        file_name='symgraph' + Logger.stringify(graph_load_sett)
+    )
 
     # ------- Load data -------
     print('Loading data ...')
@@ -75,10 +79,8 @@ if __name__ == '__main__':
 
     # Graph learner
     user_item_is_rated_mat = ~np.isnan(rating_mat_tr)
-    # long, short = percentile_calculator(rating_mat_tr)
+
     graph_learner = GraphMatrixCompletion.from_graph_object(graph, user_item_is_rated_mat)
-    # graph_learner.long = long
-    # graph_learner.short = short
 
     # Fit the ks stats
     # print('Fitting KS-statistics ...')
@@ -92,31 +94,37 @@ if __name__ == '__main__':
     logger_s = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='Sx')
 
     # ----- Coordinate descent -----
-    cd = GraphLearningCD(g_learner=graph_learner,
-                         logger_x=logger_x,
-                         logger_s=logger_s)
+    cd = GraphLearningCD(
+        g_learner=graph_learner,
+        logger_x=logger_x,
+        logger_s=logger_s
+    )
 
-    cd.run(x_0_mat=x_0_matrix,
-           rat_mat_tr=rating_mat_tr,
-           rat_mat_va=rating_mat_va,
-           rat_mat_te=rating_mat_te,
-           n_iter=n_iter,
-           verbose=verbose_cd,
-           min_val=graph_dic['ext']['dataset']['min_value'],
-           max_val=graph_dic['ext']['dataset']['max_value'],
-           calc_bias=calc_bias,
-           verbose_x=verbose_x,
-           verbose_s=verbose_s,
-           **g_learner_sett)
+    cd.run(
+        x_0_mat=x_0_matrix,
+        rat_mat_tr=rating_mat_tr,
+        rat_mat_va=rating_mat_va,
+        rat_mat_te=rating_mat_te,
+        n_iter=n_iter,
+        verbose=verbose_cd,
+        min_val=graph_dic['ext']['dataset']['min_value'],
+        max_val=graph_dic['ext']['dataset']['max_value'],
+        calc_bias=calc_bias,
+        verbose_x=verbose_x,
+        verbose_s=verbose_s,
+        **g_learner_sett
+    )
 
     # ----- Save to file -----
     if do_save:
         save_dic = g_learner_sett.copy()
         save_dic.update(graph_sett)
         save_dic.update(dataset_sett)
-        graph_learner.save_to_file(savepath=save_path,
-                                   filename='graphlearner' + Logger.stringify(save_dic),
-                                   ext_dic=graph_dic['ext'])
+        graph_learner.save_to_file(
+            savepath=save_path,
+            filename='graphlearner' + Logger.stringify(save_dic),
+            ext_dic=graph_dic['ext']
+        )
 
     '''
     # Newly added part

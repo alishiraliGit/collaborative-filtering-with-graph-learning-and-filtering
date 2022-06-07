@@ -41,23 +41,6 @@ class GraphLearningCD:
             self.logger_s.log(rmse_tr, rmse_va, rmse_te)
 
         for it in range(n_iter):
-            # Update x_mat
-            if verbose:
-                print('Updating x_mat ...')
-            self.g_learner.fit_x(**kwargs)
-
-            rat_mat_pr = self.g_learner.x_mat[:-1]
-
-            rmse_va = rmse(rat_mat_va, rat_mat_pr)
-            rmse_te = rmse(rat_mat_te, rat_mat_pr)
-            if calc_bias:
-                bias_tr = np.nanmean(rat_mat_pr - rat_mat_tr)
-                bias_va = np.nanmean(rat_mat_pr - rat_mat_va)
-                bias_te = np.nanmean(rat_mat_pr - rat_mat_te)
-                self.logger_x.log(np.nan, rmse_va, rmse_te, bias_tr, bias_va, bias_te, log_bias=True)
-            else:
-                self.logger_x.log(np.nan, rmse_va, rmse_te)
-
             # Update s_mat
             if verbose:
                 print('Updating s_mat ...')
@@ -76,10 +59,27 @@ class GraphLearningCD:
             else:
                 self.logger_s.log(rmse_tr, rmse_va, rmse_te)
 
+            # Update x_mat
+            if verbose:
+                print('Updating x_mat ...')
+            self.g_learner.fit_x(**kwargs)
+
+            rat_mat_pr = self.g_learner.x_mat[:-1]
+
+            rmse_va = rmse(rat_mat_va, rat_mat_pr)
+            rmse_te = rmse(rat_mat_te, rat_mat_pr)
+            if calc_bias:
+                bias_tr = np.nanmean(rat_mat_pr - rat_mat_tr)
+                bias_va = np.nanmean(rat_mat_pr - rat_mat_va)
+                bias_te = np.nanmean(rat_mat_pr - rat_mat_te)
+                self.logger_x.log(np.nan, rmse_va, rmse_te, bias_tr, bias_va, bias_te, log_bias=True)
+            else:
+                self.logger_x.log(np.nan, rmse_va, rmse_te)
+
     def k_trial(self, graph: GraphMatrixCompletion, rat_mat_te,  **kwargs):
         results = []
         precisions = []
-        k_values = [4,5,6.65, 10, 15, 20, 25]
+        k_values = [4, 5, 6.65, 10, 15, 20, 25]
         # k_values = [0.01, 0.1, 0.2, 0.3, 0.35, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
         test_mat = (~np.isnan(rat_mat_te) * 1)
         for k in k_values:

@@ -1,9 +1,12 @@
 from datetime import datetime
 import pickle
-from matplotlib import pyplot as plt
 import os
 import numpy as np
 from matplotlib import pyplot as plt
+
+
+def print_red(txt):
+    print('\033[91m' + txt + '\033[0m')
 
 
 class Logger:

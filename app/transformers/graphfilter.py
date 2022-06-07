@@ -9,6 +9,7 @@ class GraphFilter(Transformer):
 
         self.s_mat = s_mat
 
+        self.d = None
         self.v_mat = None
         self.v_inv_mat = None
         self.s_l_mat = None
@@ -34,7 +35,7 @@ class GraphFilter(Transformer):
         # ToDo
         v_mat = np.linalg.pinv(np.linalg.pinv(v_mat))
 
-        self.v_mat, self.v_inv_mat = v_mat, v_inv_mat
+        self.d, self.v_mat, self.v_inv_mat = d, v_mat, v_inv_mat
 
         # Split high/low freq. shift operators
         mid = np.floor(len(d)*(1 - bw)).astype(int)

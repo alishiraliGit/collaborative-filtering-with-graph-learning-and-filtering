@@ -1,5 +1,6 @@
 import os
 import abc
+
 from tqdm import tqdm
 import pickle
 import numpy as np
@@ -7,9 +8,11 @@ from scipy.optimize import least_squares, line_search
 from scipy.sparse import csr_matrix
 from scipy.stats import ks_2samp
 from sklearn.utils.extmath import randomized_svd
+from sklearn.linear_model import Ridge
 
+from app.utils.log import print_red
 from app.models.model_base import Model
-from app.transformers.graph import Graph
+from app.transformers.graph import Graph, SymmetricGraph
 from app.utils.mathtools import ls, list_minus_list, vectorize, unvectorize
 
 
@@ -54,8 +57,11 @@ class GraphLearner(GraphLearnerBase):
 
         self.s_mat = None  # [(n_user + 1) x (n_user + 1)]
 
+        self._zero_one_design_mat, self._users_x, self._items_x, self._uu_to_idx_dic =\
+            self.fit_design_matrix(adj_mat, ui_is_rated_mat)
+
     @staticmethod
-    def from_graph_object(g: Graph, ui_is_rated_mat):
+    def from_graph_object_asymmetric(g: Graph, ui_is_rated_mat):
         # Instantiate a GraphLearner
         adj_mat = g.adj_mat
         g_learner = GraphLearner(adj_mat, ui_is_rated_mat)
@@ -79,7 +85,76 @@ class GraphLearner(GraphLearnerBase):
 
         return g_learner
 
-    def fit_shift_operator(self, l2_lambda_s=0., weights=np.array([1]), verbose_s=True, **kwargs):
+    @staticmethod
+    def from_graph_object(g: SymmetricGraph, ui_is_rated_mat):
+        # Instantiate a GraphLearner
+        adj_mat = g.adj_mat
+        g_learner = GraphLearner(adj_mat, ui_is_rated_mat)
+
+        # Init. s_mat from graph w
+        n_user = g.n_user
+        s_mat = np.zeros((n_user + 1, n_user + 1))
+        s_mat[n_user, n_user] = 1
+
+        n_in_edge = np.sum(adj_mat, axis=1)
+
+        n_in_edge[n_in_edge == 0] = 1
+
+        w_normalized_mat = np.diag(1 / n_in_edge).dot(g.w_mat)
+
+        s_mat[:n_user, :n_user] = w_normalized_mat
+        s_mat[:n_user, n_user] = 0
+
+        g_learner.s_mat = s_mat
+
+        return g_learner
+
+    @staticmethod
+    def fit_design_matrix(adj_mat, ui_is_rated_mat):
+        n_user = adj_mat.shape[0]
+
+        # Assign an index to each connected user-user pair
+        idx = 0
+        uu_to_idx_dic = {}
+        for u_1, u_2 in np.argwhere(adj_mat == 1):
+            if u_1 > u_2:
+                uu_to_idx_dic[tuple([u_1, u_2])] = idx
+                idx += 1
+
+        for u in range(n_user):
+            uu_to_idx_dic[(n_user, u)] = idx
+            idx += 1
+
+        # Init.
+        users_x = []
+        items_x = []
+        zero_one_design_mat = np.zeros((np.sum(ui_is_rated_mat), len(uu_to_idx_dic)))
+
+        # For on all rated user-item pairs
+        for idx_rating, ui in tqdm(enumerate(np.argwhere(ui_is_rated_mat)), desc='GraphLearner:fit_design_matrix'):
+            u, i = ui
+
+            # Find u's neighbors
+            neighbors_u = np.where(adj_mat[u] == 1)[0]
+
+            # Find uu indices corresponding to u and u's neighbors
+            uu_indices = \
+                [uu_to_idx_dic[(np.maximum(neighbor_u, u), np.minimum(neighbor_u, u))] for neighbor_u in neighbors_u]
+
+            # Add a row to the zero-one design matrix
+            zero_one_design_mat[idx_rating, uu_indices] = 1
+            zero_one_design_mat[idx_rating, uu_to_idx_dic[(n_user, u)]] = 1
+
+            # Keep a reference of u's neighbors and i to later fill the design matrix
+            users_x.extend(neighbors_u.tolist())
+            users_x.append(n_user)
+
+            items_x.extend([i]*len(neighbors_u))
+            items_x.append(i)
+
+        return zero_one_design_mat, users_x, items_x, uu_to_idx_dic
+
+    def fit_shift_operator_asymmetric(self, l2_lambda_s=0., weights=np.array([1]), verbose_s=True, **_kwargs):
         n_user = self._n_user
 
         self.s_mat = np.zeros((n_user + 1, n_user + 1))
@@ -106,6 +181,38 @@ class GraphLearner(GraphLearnerBase):
 
             # Fill the s_mat
             self.s_mat[u, idx_s_u] = s_u[:, 0]
+
+    def fit_shift_operator(self, l2_lambda_s=0., weights=np.array([1]), verbose_s=True, **_kwargs):
+        # Find the design matrix
+        design_mat = self._zero_one_design_mat.copy()
+        design_mat[np.where(design_mat == 1)] = self.x_mat[(self._users_x, self._items_x)]
+
+        # Find rated users and items
+        users_rated, items_rated = np.where(self._ui_is_rated_mat)
+
+        # Extract the target ratings
+        y = self.x_mat[:-1][(users_rated, items_rated)]
+
+        # Assign weights to ratings based on their items
+        if len(weights) > 1:
+            weights_ratings = weights[items_rated]
+        else:
+            weights_ratings = weights[0]
+
+        # Solve the linear system
+        if verbose_s:
+            print_red('GraphLearner:fit_shift_operator:solve_linear_system')
+
+        # s = ls(design_mat, y, l2_lambda=l2_lambda_s, weights=weights_ratings)
+        reg = Ridge(alpha=l2_lambda_s)
+        reg.fit(X=design_mat, y=y, sample_weight=weights_ratings)
+        s = reg.coef_
+
+        # Fill the shift op matrix
+        for uu, idx in self._uu_to_idx_dic.items():
+            u_1, u_2 = uu
+            self.s_mat[u_1, u_2] = s[idx]
+            self.s_mat[u_2, u_1] = s[idx]
 
     def fit_x(self, min_val=1, max_val=5, max_distance_to_rated=1, gamma=0., max_nfev_x=3,
               verbose_x=True, **kwargs):
@@ -232,7 +339,7 @@ class CounterfactualGraphLearner(GraphLearnerBase):
         self.ks_mat = None  # [n_item x n_item]
 
     @staticmethod
-    def from_graph_object(g: Graph, ui_is_rated_mat):
+    def from_graph_object(g, ui_is_rated_mat):
         # Instantiate a GraphLearner from graph
         g_learner = GraphLearner.from_graph_object(g, ui_is_rated_mat)
 
@@ -344,7 +451,7 @@ class GraphMatrixCompletion(GraphLearnerBase):
         self.s_tilde_mat = None
 
     @staticmethod
-    def from_graph_object(g: Graph, ui_is_rated_mat):
+    def from_graph_object(g, ui_is_rated_mat):
         gmc = GraphMatrixCompletion(g.adj_mat, ui_is_rated_mat)
 
         g_learner = GraphLearner.from_graph_object(g, ui_is_rated_mat)
@@ -362,7 +469,7 @@ class GraphMatrixCompletion(GraphLearnerBase):
 
         self.s_mat = g_learner.s_mat
 
-    def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **kwargs):
+    def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **_kwargs):
         s_tilde_mat = (self.s_mat.T - np.eye(self._n_user + 1)).dot(self.s_mat - np.eye(self._n_user + 1))
 
         it = 1
@@ -593,3 +700,26 @@ class CounterfactualGraphMatrixCompletion(GraphLearnerBase):
     def load_from_file(loadpath, file_name):
         # ToDo
         pass
+
+
+if __name__ == '__main__':
+    adj_mat_ = np.array([
+        [0, 1, 0],
+        [1, 0, 1],
+        [0, 1, 0]
+    ])
+
+    t_0_ = np.random.random((1, 200)) - 0.5
+    t_2_ = np.random.random((1, 200)) - 0.5
+    rating_mat_ = np.concatenate((t_0_, t_0_ + t_2_ + np.random.random((1, 200))*0.1, t_2_), axis=0)
+
+    n_u_, n_i_ = rating_mat_.shape
+
+    gl_ = GraphLearner(adj_mat_, ~np.isnan(rating_mat_))
+
+    x_mat_ = np.concatenate((rating_mat_, np.ones((1, n_i_))), axis=0)
+
+    gl_.x_mat = x_mat_
+    gl_.s_mat = np.zeros((n_u_ + 1, n_u_ + 1))
+
+    gl_.fit_shift_operator()
