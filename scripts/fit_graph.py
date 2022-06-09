@@ -31,7 +31,7 @@ if __name__ == '__main__':
 
     # Graph
     graph_sett['min_num_common_items'] = 8
-    graph_sett['max_degree'] = 3
+    graph_sett['max_degree'] = 5
     graph_sett['min_degree'] = 1  # For symmetric graph only
 
     assert graph_sett['max_degree'] <= graph_sett['min_num_common_items']

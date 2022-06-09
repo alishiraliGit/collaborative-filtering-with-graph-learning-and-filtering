@@ -4,6 +4,8 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
+from app.utils.mathtools import rmse
+
 
 def print_red(txt):
     print('\033[91m' + txt + '\033[0m')
@@ -67,6 +69,20 @@ class Logger:
                 plt.xlabel('#iter')
 
             plt.pause(0.05)
+
+    def eval_and_log(self, rat_mat_pr, rat_mat_tr, rat_mat_va, rat_mat_te, calc_bias=False):
+        rmse_tr = rmse(rat_mat_tr, rat_mat_pr)
+        rmse_va = rmse(rat_mat_va, rat_mat_pr)
+        rmse_te = rmse(rat_mat_te, rat_mat_pr)
+
+        if calc_bias:
+            bias_tr = np.nanmean(rat_mat_pr - rat_mat_tr)
+            bias_va = np.nanmean(rat_mat_pr - rat_mat_va)
+            bias_te = np.nanmean(rat_mat_pr - rat_mat_te)
+            self.log(rmse_tr, rmse_va, rmse_te, bias_tr, bias_va, bias_te, log_bias=True)
+        else:
+            self.log(rmse_tr, rmse_va, rmse_te)
+
 
     def save(self, ext=None):
         stringified = 'result' + Logger.stringify(self.settings)

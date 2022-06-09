@@ -199,7 +199,8 @@ class SymmetricGraph(Transformer):
         for u_1, u_2 in tqdm(candidate_uu_list, desc='SymmetricGraph:fit:find_scores'):
             mask_both_rated = ~np.isnan(rat_mat[u_1]) & ~np.isnan(rat_mat[u_2])
 
-            weights.append(np.abs(np.corrcoef(rat_mat[u_1, mask_both_rated], rat_mat[u_2, mask_both_rated])[0, 1]))
+            r = np.corrcoef(rat_mat[u_1, mask_both_rated], rat_mat[u_2, mask_both_rated])[0, 1]
+            weights.append(r)
 
             if np.isnan(weights[-1]):  # This is the case where Var1=0 or Var2=
                 weights[-1] = 0
@@ -216,7 +217,7 @@ class SymmetricGraph(Transformer):
 
         n_neighbors_per_user = np.sum(self.adj_mat, axis=1)
 
-        for idx_e in np.argsort(weights):
+        for idx_e in np.argsort(np.abs(weights)):
             u_1, u_2 = candidate_uu_list[idx_e]
 
             if n_neighbors_per_user[u_1] > self.max_degree and n_neighbors_per_user[u_2] > self.max_degree:
