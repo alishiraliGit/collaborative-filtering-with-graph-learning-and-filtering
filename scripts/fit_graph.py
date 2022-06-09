@@ -1,6 +1,6 @@
 import os
 
-from app.transformers.graph import Graph, SymmetricGraph
+from app.transformers.graph import Graph, SymmetricGraph, SmoothGraph
 from app.utils.data_handler import load_dataset
 from app.utils.log import Logger
 
@@ -32,7 +32,7 @@ if __name__ == '__main__':
     # Graph
     graph_sett['min_num_common_items'] = 8
     graph_sett['max_degree'] = 5
-    graph_sett['min_degree'] = 1  # For symmetric graph only
+    graph_sett['min_degree'] = 3  # For symmetric and smooth graphs only
 
     assert graph_sett['max_degree'] <= graph_sett['min_num_common_items']
 
@@ -49,10 +49,10 @@ if __name__ == '__main__':
 
     # ----- Fit graph structure -----
     print('Fitting graph on ratings ...')
-    graph = SymmetricGraph(
+    graph = SmoothGraph(
         min_num_common_items=graph_sett['min_num_common_items'],
         max_degree=graph_sett['max_degree'],
-        min_degree=graph_sett['min_degree']  # For symmetric graph only
+        min_degree=graph_sett['min_degree']  # For symmetric and smooth graphs only
     )
 
     graph.fit_transform(rating_mat_tr)
@@ -61,6 +61,6 @@ if __name__ == '__main__':
     print('Saving graph to file ...')
     graph.save_to_file(
         save_path=save_path,
-        file_name='symgraph' + Logger.stringify(save_dic),
+        file_name='graph' + Logger.stringify(save_dic),
         ext_dic={'dataset': dataset_sett}
     )

@@ -2,7 +2,7 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
-from app.transformers.graph import Graph, SymmetricGraph
+from app.transformers.graph import Graph, SymmetricGraph, SmoothGraph
 from app.models.graphlearning import GraphLearner, CounterfactualGraphLearner, GraphMatrixCompletion, \
     CounterfactualGraphMatrixCompletion, GraphLearnerWithNoBias, GraphMatrixCompletionWithNoBias
 from app.utils.mathtools import fill_with_row_means, percentile_calculator, ACLT
@@ -34,8 +34,8 @@ if __name__ == '__main__':
 
     # Graph
     graph_sett['min_num_common_items'] = 8
-    graph_sett['max_degree'] = 3  # 5
-    graph_sett['min_degree'] = 1  # Only for symmetric graphs, 1
+    graph_sett['max_degree'] = 5  # 5
+    graph_sett['min_degree'] = 3  # Only for symmetric graphs, 1
 
     # GraphLearner
 
@@ -56,7 +56,7 @@ if __name__ == '__main__':
     verbose_s = False
 
     # Coordinate Descent
-    n_iter = 1
+    n_iter = 2
     calc_bias = False
     verbose_cd = True
 
@@ -64,9 +64,9 @@ if __name__ == '__main__':
     print('Loading graph ...')
     graph_load_sett = graph_sett.copy()
     graph_load_sett.update(dataset_sett)
-    graph, graph_dic = SymmetricGraph.load_from_file(
+    graph, graph_dic = SmoothGraph.load_from_file(
         load_path=graph_load_path,
-        file_name='symgraph' + Logger.stringify(graph_load_sett)
+        file_name='graph' + Logger.stringify(graph_load_sett)
     )
 
     # ------- Load data -------
@@ -100,8 +100,8 @@ if __name__ == '__main__':
 
     # ----- Coordinate descent -----
     # ToDo
-    # plt.figure()
-    # plt.plot(graph.w_mat[graph.adj_mat == 1], graph_learner.s_mat[graph.adj_mat == 1], 'k*')
+    plt.figure()
+    plt.plot(graph.w_mat[graph.adj_mat == 1], graph_learner.s_mat[graph.adj_mat == 1], 'k*')
 
     cd = GraphLearningCD(
         g_learner=graph_learner,
@@ -125,8 +125,8 @@ if __name__ == '__main__':
     )
 
     # ToDo
-    # plt.figure()
-    # plt.plot(graph.w_mat[graph.adj_mat == 1], graph_learner.s_mat[graph.adj_mat == 1], 'k*')
+    plt.figure()
+    plt.plot(graph.w_mat[graph.adj_mat == 1], graph_learner.s_mat[graph.adj_mat == 1], 'k*')
 
     # ----- Save to file -----
     if do_save:

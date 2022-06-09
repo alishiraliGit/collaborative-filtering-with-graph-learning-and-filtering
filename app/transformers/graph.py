@@ -131,8 +131,6 @@ class Graph(Transformer):
         mask = np.zeros((n_user, n_user)).astype(bool)
 
         for u in range(n_user):
-            if u == 153:
-                a = 1
             scores_u = score[u]
 
             idx_max_scores_u = np.argsort(scores_u)[-max_degree:]
@@ -247,18 +245,140 @@ class SymmetricGraph(Transformer):
             'ext': ext_dic
         }
 
-        with open(os.path.join(save_path, file_name + '.graph'), 'wb') as f:
+        with open(os.path.join(save_path, file_name + '.symgraph'), 'wb') as f:
             pickle.dump(dic, f)
 
     @staticmethod
     def load_from_file(load_path, file_name):
-        with open(os.path.join(load_path, file_name + '.graph'), 'rb') as f:
+        with open(os.path.join(load_path, file_name + '.symgraph'), 'rb') as f:
             dic = pickle.load(f)
 
         g = SymmetricGraph(
             min_num_common_items=dic['min_num_common_items'],
             min_degree=dic['min_degree'],
             max_degree=dic['max_degree'])
+
+        g.w_mat = dic['w_mat']
+        g.adj_mat = dic['adj_mat']
+        g.n_user = g.adj_mat.shape[0]
+
+        return g, dic
+
+
+class SmoothGraph(Transformer):
+    def __init__(self, min_num_common_items, min_degree, max_degree):
+        Transformer.__init__(self)
+
+        self.min_num_common_items = min_num_common_items
+        self.min_degree = min_degree
+        self.max_degree = max_degree  # Useful only for pruning
+
+        self.w_mat = None
+        self.adj_mat = None
+
+        self.n_user = None
+
+    def fit(self, rat_mat, do_pruning=True):
+        self.n_user = rat_mat.shape[0]
+
+        # Calc. number of common items for all pairs of the users
+        mask_one = (~np.isnan(rat_mat))*1
+        u_u_num_common_items = mask_one.dot(mask_one.T)
+        u_u_num_common_items[np.eye(self.n_user).astype(bool)] = 0  # Set diagonal to zero
+
+        # Find candidate neighbors
+        min_num_common_items = self.min_num_common_items
+        candidate_uu_set = self.get_candidate_neighbors_set(u_u_num_common_items, min_num_common_items)
+
+        while True:
+            need_more = np.where(np.sum(u_u_num_common_items >= min_num_common_items, axis=1) < self.min_degree)[0]
+
+            # Check if any user needs more candidate neighbors
+            if len(need_more) == 0:
+                break
+
+            # Decrease required number of common items
+            min_num_common_items -= 1
+
+            # Find new candidate pairs
+            new_candidate_uu_set = \
+                self.get_candidate_neighbors_set(u_u_num_common_items[need_more], min_num_common_items)
+
+            candidate_uu_set.update(new_candidate_uu_set)
+
+        # Init.
+        self.adj_mat = np.zeros((self.n_user, self.n_user))
+        self.w_mat = np.zeros((self.n_user, self.n_user))
+
+        candidate_uu_list = list(candidate_uu_set)
+        weights = []
+
+        # Find the weights
+        for u_1, u_2 in tqdm(candidate_uu_list, desc='SymmetricGraph:fit:find_scores'):
+            mask_both_rated = ~np.isnan(rat_mat[u_1]) & ~np.isnan(rat_mat[u_2])
+
+            mse = np.mean((rat_mat[u_1, mask_both_rated] - rat_mat[u_2, mask_both_rated])**2)
+            w = np.exp(-mse)
+            weights.append(w)
+
+            if np.isnan(weights[-1]):  # This is the case where Var1=0 or Var2=
+                weights[-1] = 0
+
+            self.w_mat[u_1, u_2] = weights[-1]
+            self.w_mat[u_2, u_1] = weights[-1]
+
+            self.adj_mat[u_1, u_2] = 1
+            self.adj_mat[u_2, u_1] = 1
+
+        # Pruning
+        if not do_pruning:
+            return
+
+        n_neighbors_per_user = np.sum(self.adj_mat, axis=1)
+
+        for idx_e in np.argsort(np.abs(weights)):
+            u_1, u_2 = candidate_uu_list[idx_e]
+
+            if n_neighbors_per_user[u_1] > self.max_degree and n_neighbors_per_user[u_2] > self.max_degree:
+                self.w_mat[u_1, u_2] = 0
+                self.w_mat[u_2, u_1] = 0
+
+                self.adj_mat[u_1, u_2] = 0
+                self.adj_mat[u_2, u_1] = 0
+
+                n_neighbors_per_user[u_1] -= 1
+                n_neighbors_per_user[u_2] -= 1
+
+    @staticmethod
+    def get_candidate_neighbors_set(u_u_num_common_items, min_num_common_items):
+        return {(np.max(uu), np.min(uu)) for uu in np.argwhere(u_u_num_common_items >= min_num_common_items)}
+
+    def transform(self, data_te, **kwargs):
+        return self.w_mat, self.adj_mat
+
+    def save_to_file(self, save_path, file_name, ext_dic=None):
+        dic = {
+            'min_num_common_items': self.min_num_common_items,
+            'min_degree': self.min_degree,
+            'max_degree': self.max_degree,
+            'w_mat': self.w_mat,
+            'adj_mat': self.adj_mat,
+            'ext': ext_dic
+        }
+
+        with open(os.path.join(save_path, file_name + '.smoothgraph'), 'wb') as f:
+            pickle.dump(dic, f)
+
+    @staticmethod
+    def load_from_file(load_path, file_name):
+        with open(os.path.join(load_path, file_name + '.smoothgraph'), 'rb') as f:
+            dic = pickle.load(f)
+
+        g = SmoothGraph(
+            min_num_common_items=dic['min_num_common_items'],
+            min_degree=dic['min_degree'],
+            max_degree=dic['max_degree']
+        )
 
         g.w_mat = dic['w_mat']
         g.adj_mat = dic['adj_mat']
