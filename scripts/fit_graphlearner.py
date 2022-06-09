@@ -18,7 +18,7 @@ if __name__ == '__main__':
 
     # General
     do_plot_performance_while_logging = False
-    do_save = False
+    do_save = True
 
     # Path
     data_load_path = os.path.join('..', 'data', 'ml-100k')
@@ -33,9 +33,9 @@ if __name__ == '__main__':
     dataset_sett['do_transpose'] = False
 
     # Graph
-    graph_sett['min_num_common_items'] = 8
+    graph_sett['min_num_common_items'] = 6
     graph_sett['max_degree'] = 5  # 5
-    graph_sett['min_degree'] = 3  # Only for symmetric graphs, 1
+    graph_sett['min_degree'] = 1  # Only for symmetric graphs, 1
 
     # GraphLearner
 

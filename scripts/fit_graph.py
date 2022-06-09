@@ -30,9 +30,9 @@ if __name__ == '__main__':
     dataset_sett['do_transpose'] = False
 
     # Graph
-    graph_sett['min_num_common_items'] = 8
-    graph_sett['max_degree'] = 5
-    graph_sett['min_degree'] = 3  # For symmetric and smooth graphs only
+    graph_sett['min_num_common_items'] = 4
+    graph_sett['max_degree'] = 3
+    graph_sett['min_degree'] = 1  # For symmetric and smooth graphs only
 
     assert graph_sett['max_degree'] <= graph_sett['min_num_common_items']
 
