@@ -101,9 +101,6 @@ if __name__ == '__main__':
     logger_s = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='Sx')
 
     # ----- Coordinate descent -----
-    # ToDo
-    plt.figure()
-    plt.plot(graph.w_mat[graph.adj_mat == 1], graph_learner.s_mat[graph.adj_mat == 1], 'k*')
 
     cd = GraphLearningCD(
         g_learner=graph_learner,
@@ -125,10 +122,6 @@ if __name__ == '__main__':
         verbose_s=verbose_s,
         **g_learner_sett
     )
-
-    # ToDo
-    plt.figure()
-    plt.plot(graph.w_mat[graph.adj_mat == 1], graph_learner.s_mat[graph.adj_mat == 1], 'k*')
 
     # ----- Save to file -----
     if do_save:

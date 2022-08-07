@@ -17,10 +17,12 @@ class GraphLearningCD:
         self.g_learner.x_mat = x_0_mat
 
         # Initial evaluations
+        print('Initial eval. x:')
         rat_mat_pr = self.g_learner.x_mat[:n_user]
         self.logger_x.eval_and_log(rat_mat_pr, rat_mat_tr, rat_mat_va, rat_mat_te, calc_bias)
 
-        # ToDo
+        print('Initial eval. S*x:')
+        # ToDo: unnecessary
         self.g_learner.fit_scale_of_shift_operator()
 
         rat_mat_pr = self.g_learner.predict(self.g_learner.x_mat)
