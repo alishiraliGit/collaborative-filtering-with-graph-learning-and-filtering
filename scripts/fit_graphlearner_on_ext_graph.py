@@ -1,11 +1,12 @@
 import os
+import pickle
 import numpy as np
 from matplotlib import pyplot as plt
 
-from app.transformers.graph import Graph, SymmetricGraph, SmoothGraph
+from app.transformers.graph import SmoothGraph
 from app.models.graphlearning import GraphLearner, CounterfactualGraphLearner, GraphMatrixCompletion, \
     CounterfactualGraphMatrixCompletion, GraphLearnerWithNoBias, GraphMatrixCompletionWithNoBias
-from app.utils.mathtools import fill_with_row_means, percentile_calculator, ACLT
+from app.utils.mathtools import fill_with_row_means
 from app.utils.log import Logger
 from app.utils.data_handler import load_dataset
 from core.coordinatedescent import GraphLearningCD
@@ -13,7 +14,7 @@ from core.coordinatedescent import GraphLearningCD
 if __name__ == '__main__':
     # ----- Settings -----
     dataset_sett = {}
-    graph_sett = {}
+    ext_graph_sett = {}
     g_learner_sett = {}
 
     # General
@@ -22,20 +23,24 @@ if __name__ == '__main__':
 
     # Path
     data_load_path = os.path.join('..', 'data', 'ml-100k')
-    graph_load_path = os.path.join('..', 'results', 'graphs')
+    ext_graph_load_path = os.path.join('..', 'results', 'graphs', 'ext')
 
     save_path = os.path.join('..', 'results', 'graphlearners')
     os.makedirs(save_path, exist_ok=True)
 
     # Dataset
-    dataset_sett['dataset_name'] = 'ml-100k'
+    dataset_sett['name'] = 'ml-100k'
     dataset_sett['part'] = 3
+    dataset_sett['min_value'] = 1
+    dataset_sett['max_value'] = 5
     dataset_sett['do_transpose'] = False
 
+    # Cross-validation
+    dataset_sett['va_split'] = 0.1
+    dataset_sett['random_state'] = 1
+
     # Graph
-    graph_sett['min_num_common_items'] = 6
-    graph_sett['max_degree'] = 5  # 5
-    graph_sett['min_degree'] = 1  # Only for symmetric graphs, 1
+    ext_graph_sett['name'] = 'graph_a0_b-2'
 
     # GraphLearner
 
@@ -48,10 +53,10 @@ if __name__ == '__main__':
     # Settings for GraphMatrixCompletion class:
     g_learner_sett['beta'] = 100  # 100
     g_learner_sett['eps_x'] = 1e-3  # 1e-2, 1e-3
-    g_learner_sett['max_iter_x'] = 20  # 20, 10
-    g_learner_sett['l2_lambda_s'] = 10  # 10, 1
+    g_learner_sett['max_iter_x'] = 20  # 20
+    g_learner_sett['l2_lambda_s'] = 10  # 10
     g_learner_sett['l1_ratio_s'] = 0  # 0
-    g_learner_sett['max_iter_s'] = 1  # 1 for bvls, 20 for trf
+    g_learner_sett['max_iter_s'] = 20  # 1 for bvls, 20 for trf
     g_learner_sett['bound_s'] = False
 
     verbose_x = False
@@ -62,19 +67,21 @@ if __name__ == '__main__':
     calc_bias = False
     verbose_cd = True
 
-    # ----- Load graph -----
-    print('Loading graph ...')
-    graph_load_sett = graph_sett.copy()
-    graph_load_sett.update(dataset_sett)
-    graph, graph_dic = SmoothGraph.load_from_file(
-        load_path=graph_load_path,
-        file_name='graph' + Logger.stringify(graph_load_sett)
-    )
+    # ----- Load ext graph -----
+    print('Loading ext graph ...')
+    with open(os.path.join(ext_graph_load_path, ext_graph_sett['name'] + '.pkl'), 'rb') as f:
+        ext_graph_dic = pickle.load(f)
+
+    graph = SmoothGraph(None, None, None)
+
+    graph.adj_mat = ext_graph_dic['adj_mat']
+    graph.w_mat = ext_graph_dic['w_mat']
+    graph.n_user = graph.adj_mat.shape[0]
 
     # ------- Load data -------
     print('Loading data ...')
     rating_mat_tr, rating_mat_va, rating_mat_te, n_user, n_item = \
-        load_dataset(data_load_path, **graph_dic['ext']['dataset'])
+        load_dataset(data_load_path, **dataset_sett)
 
     # ----- Init. -----
     print('Initializing ...')
@@ -95,7 +102,7 @@ if __name__ == '__main__':
 
     # Logger
     log_sett = g_learner_sett.copy()
-    log_sett.update(graph_sett)
+    log_sett.update(ext_graph_sett)
     log_sett.update(dataset_sett)
     logger_x = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='x')
     logger_s = Logger(settings=log_sett, save_path=save_path, do_plot=do_plot_performance_while_logging, title='Sx')
@@ -118,8 +125,8 @@ if __name__ == '__main__':
         rat_mat_te=rating_mat_te,
         n_iter=n_iter,
         verbose=verbose_cd,
-        min_val=graph_dic['ext']['dataset']['min_value'],
-        max_val=graph_dic['ext']['dataset']['max_value'],
+        min_val=dataset_sett['min_value'],
+        max_val=dataset_sett['max_value'],
         calc_bias=calc_bias,
         verbose_x=verbose_x,
         verbose_s=verbose_s,
@@ -133,12 +140,11 @@ if __name__ == '__main__':
     # ----- Save to file -----
     if do_save:
         save_dic = g_learner_sett.copy()
-        save_dic.update(graph_sett)
+        save_dic.update(ext_graph_sett)
         save_dic.update(dataset_sett)
         graph_learner.save_to_file(
             savepath=save_path,
             filename='graphlearner' + Logger.stringify(save_dic),
-            ext_dic=graph_dic['ext']
         )
 
     # ----- Plotting -----

@@ -55,7 +55,7 @@ if __name__ == '__main__':
         min_degree=graph_sett['min_degree']  # For symmetric and smooth graphs only
     )
 
-    graph.fit_transform(rating_mat_tr)
+    graph.fit_transform(rating_mat_tr, do_pruning=True)
 
     # ----- Save to file -----
     print('Saving graph to file ...')

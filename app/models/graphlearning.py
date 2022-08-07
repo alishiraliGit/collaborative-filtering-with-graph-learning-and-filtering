@@ -4,7 +4,7 @@ import abc
 from tqdm import tqdm
 import pickle
 import numpy as np
-from scipy.optimize import least_squares, line_search
+from scipy.optimize import least_squares, line_search, lsq_linear
 from scipy.sparse import csr_matrix
 from scipy.stats import ks_2samp
 from sklearn.utils.extmath import randomized_svd
@@ -378,10 +378,10 @@ class GraphLearnerWithNoBias(GraphLearnerBase):
         # Instantiate a GraphLearner
         g_learner = GraphLearnerWithNoBias(adj_mat, ui_is_rated_mat)
 
-        # Find largest eigenvalue
+        # Find the largest eigenvalue
         w_1 = eigsh(w_mat, k=1, which='LM', return_eigenvectors=False)[0]
 
-        # Set shift operator as the normalized the weight matrix
+        # Set the shift operator as the normalized weight matrix
         g_learner.s_mat = w_mat/w_1
 
         return g_learner
@@ -402,7 +402,7 @@ class GraphLearnerWithNoBias(GraphLearnerBase):
         zero_one_design_mat = np.zeros((np.sum(ui_is_rated_mat), len(uu_to_idx_dic)))
 
         # For on all rated user-item pairs
-        for idx_rating, ui in tqdm(enumerate(np.argwhere(ui_is_rated_mat)), desc='GraphLearnerWNB:fit_design_matrix'):
+        for idx_rating, ui in enumerate(tqdm(np.argwhere(ui_is_rated_mat), desc='GraphLearnerWNB:fit_design_matrix')):
             u, i = ui
 
             # Find u's neighbors
@@ -422,7 +422,8 @@ class GraphLearnerWithNoBias(GraphLearnerBase):
 
         return zero_one_design_mat, users_x, items_x, uu_to_idx_dic
 
-    def fit_shift_operator(self, l2_lambda_s=0., l1_ratio_s=0., weights=np.array([1]), verbose_s=True, **_kwargs):
+    def fit_shift_operator(self, l2_lambda_s=0., l1_ratio_s=0., max_iter_s=20, bound_s=True,
+                           weights=np.array([1]), verbose_s=True, **_kwargs):
         # Find the design matrix
         design_mat = self._zero_one_design_mat.copy()
         design_mat[np.where(design_mat == 1)] = self.x_mat[(self._users_x, self._items_x)]
@@ -433,25 +434,46 @@ class GraphLearnerWithNoBias(GraphLearnerBase):
         # Extract the target ratings
         y = self.x_mat[(users_rated, items_rated)]
 
-        # Assign weights to ratings based on their items
+        # Weight ratings
         if len(weights) > 1:
             weights_ratings = weights[items_rated]
-        else:
-            weights_ratings = weights[0]
+            weights_ratings /= np.mean(weights_ratings)  # Normalize weights
+
+            design_mat *= weights_ratings.reshape((-1, 1))
+            y *= weights_ratings
 
         # Solve the linear system
         if verbose_s:
             print_red('GraphLearnerWNB:fit_shift_operator:solve_linear_system')
 
-        if l1_ratio_s == 0:
-            reg = Ridge(alpha=l2_lambda_s, fit_intercept=False)
-        elif l1_ratio_s == 1:
-            reg = Lasso(alpha=l2_lambda_s/len(y), fit_intercept=False)
-        else:
-            reg = ElasticNet(alpha=l2_lambda_s/len(y), l1_ratio=l1_ratio_s, fit_intercept=False)
+        n_rat, n_s = design_mat.shape
 
-        reg.fit(X=design_mat, y=y, sample_weight=weights_ratings)
-        s = reg.coef_
+        if bound_s:
+            if l2_lambda_s > 0:
+                design_eye_mat = np.concatenate((design_mat, l2_lambda_s*np.eye(n_s)), axis=0)
+                y_zero_pad = np.concatenate((y, np.zeros((n_s,))))
+            else:
+                design_eye_mat = design_mat
+                y_zero_pad = y
+
+            s = lsq_linear(
+                A=design_eye_mat,
+                b=y_zero_pad,
+                bounds=(0, np.inf),
+                method='trf',
+                max_iter=max_iter_s,
+                verbose=2*verbose_s
+            ).x
+        else:
+            if l1_ratio_s == 0:
+                reg = Ridge(alpha=l2_lambda_s, fit_intercept=False)
+            elif l1_ratio_s == 1:
+                reg = Lasso(alpha=l2_lambda_s/len(y), fit_intercept=False)
+            else:
+                reg = ElasticNet(alpha=l2_lambda_s/len(y), l1_ratio=l1_ratio_s, fit_intercept=False)
+
+            reg.fit(X=design_mat, y=y)
+            s = reg.coef_
 
         # Fill the shift op matrix
         for uu, idx in self._uu_to_idx_dic.items():
@@ -684,13 +706,12 @@ class GraphMatrixCompletion(GraphLearnerBase):
 
         self.s_mat = g_learner.s_mat
 
-    def fit_x(self, beta=1, eps_x=1e-3, verbose_x=True, **_kwargs):
+    def fit_x(self, beta=1, eps_x=1e-3, max_iter_x=10, verbose_x=True, **_kwargs):
         s_tilde_mat = (self.s_mat.T - np.eye(self._n_user + 1)).dot(self.s_mat - np.eye(self._n_user + 1))
 
         it = 1
-        max_it = 50
         while True:
-            if it == max_it:
+            if it == max_iter_x:
                 break
 
             # Line-search
@@ -807,24 +828,31 @@ class GraphMatrixCompletionWithNoBias(GraphLearnerBase):
     def __init__(self, adj_mat, ui_is_rated_mat):
         super().__init__(adj_mat, ui_is_rated_mat)
 
+        self._g_learner = GraphLearnerWithNoBias(adj_mat, ui_is_rated_mat)
+
     @staticmethod
     def from_graph_object(g, ui_is_rated_mat):
-        gmc = GraphMatrixCompletionWithNoBias(g.adj_mat, ui_is_rated_mat)
+        adj_mat = g.adj_mat
+        w_mat = g.w_mat
 
-        g_learner = GraphLearnerWithNoBias.from_graph_object(g, ui_is_rated_mat)
+        # Instantiate a GMC
+        gmc = GraphMatrixCompletionWithNoBias(adj_mat, ui_is_rated_mat)
 
-        gmc.s_mat = g_learner.s_mat
+        # Find the largest eigenvalue
+        w_1 = eigsh(w_mat, k=1, which='LM', return_eigenvectors=False)[0]
+
+        # Set the shift operator as the normalized weight matrix
+        gmc.s_mat = w_mat/w_1
 
         return gmc
 
     def fit_shift_operator(self, **kwargs):
-        g_learner = GraphLearnerWithNoBias(adj_mat=self._adj_mat, ui_is_rated_mat=self._ui_is_rated_mat)
-        g_learner.x_mat = self.x_mat
-        g_learner.s_mat = self.s_mat
+        self._g_learner.x_mat = self.x_mat
+        self._g_learner.s_mat = self.s_mat
 
-        g_learner.fit_shift_operator(**kwargs)
+        self._g_learner.fit_shift_operator(**kwargs)
 
-        self.s_mat = g_learner.s_mat
+        self.s_mat = self._g_learner.s_mat
 
     def fit_x(self, beta=1, eps_x=1e-3, max_iter_x=10, verbose_x=True, **_kwargs):
         s_tilde_mat = (self.s_mat.T - np.eye(self._n_user)).dot(self.s_mat - np.eye(self._n_user))

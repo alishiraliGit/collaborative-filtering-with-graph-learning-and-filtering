@@ -20,16 +20,16 @@ class GraphLearningCD:
         rat_mat_pr = self.g_learner.x_mat[:n_user]
         self.logger_x.eval_and_log(rat_mat_pr, rat_mat_tr, rat_mat_va, rat_mat_te, calc_bias)
 
+        # ToDo
+        self.g_learner.fit_scale_of_shift_operator()
+
         rat_mat_pr = self.g_learner.predict(self.g_learner.x_mat)
         self.logger_s.eval_and_log(rat_mat_pr, rat_mat_tr, rat_mat_va, rat_mat_te, calc_bias)
 
-        # ToDo
-        # self.g_learner.fit_scale_of_shift_operator()
-        # rat_mat_pr = self.g_learner.predict(self.g_learner.x_mat)
-        # self.logger_s.eval_and_log(rat_mat_pr, rat_mat_tr, rat_mat_va, rat_mat_te, calc_bias)
-
+        # Default: first update s_mat
         for it in range(n_iter):
             print('=====================')
+
             # Update s_mat
             if verbose:
                 print('Updating s_mat ...')
